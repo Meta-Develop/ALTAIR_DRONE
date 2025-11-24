@@ -1,0 +1,75 @@
+# Section 0: System Architecture & Master Context (STRICT)
+
+**Project:** ALTAIR Hexacopter Control System
+**Type:** Voliro-type (Fully Actuated 12-DOF)
+**Goal:** Develop a distributed control system for the ALTAIR drone.
+
+## 0.1 Directory Structure (Root: `~/altair_project/`)
+All code must assume this relative path structure.
+* `software/`
+    * `common/` (Shared resources)
+        * `altair_description/` (URDF package, generated from CAD)
+    * `pico_firmware/` (**Target for this task**)
+        * `src/`, `CMakeLists.txt`
+    * `RPi4_1_ws/` (Node B workspace)
+    * `RPi4_2_ws/` (Node C workspace)
+    * `gcs_tools_ws/` (PC workspace)
+
+## 0.2 Node Roles & Hardware
+* **Node A: RPi Pico (IO Hub)** [Target]
+    * **Role:** Real-time IO. Reads Sensors, Drives Motors.
+    * **HW:** RP2040, BNO055(I2C), 6x ESC(DShot), USB Connection.
+* **Node B: RPi 4 #1 (Bridge)**
+    * **Role:** Sensor Fusion, Safety Mux, Servo Driver.
+* **Node C: RPi 4 #2 (Controller)**
+    * **Role:** NMPC / PID Control.
+* **Node GCS: PC (Monitor)**
+    * **Role:** Human Interface, Debugging.
+
+## 0.3 ROS 2 Interface Specifications & QoS
+**QoS Policy:** "SensorData" = Best Effort, Volatile (Low Latency). "Reliable" = TCP-like (Guaranteed).
+
+| Topic Name | From | To | Type | Size | QoS | Notes |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `/control/actuator_commands` | Node C | Node B | `Float32MultiArray` | 12 | SensorData | [M1..6, S1..6] |
+| `/control/manual_override` | GCS | Node B | `Float32MultiArray` | 12 | Reliable | For Maintenance |
+| `/pico/motor_commands` | Node B | Node A | `Float32MultiArray` | 6 | SensorData | Thrust (0.0-1.0) |
+| `/pico/imu_raw` | Node A | Node B | `sensor_msgs/Imu` | - | SensorData | Accel/Gyro Only |
+| `/pico/esc_telemetry` | Node A | Node B | `Float32MultiArray` | 6 | SensorData | Motor RPM |
+| `/odometry/filtered` | Node B | Node C | `nav_msgs/Odometry` | - | SensorData | EKF Output |
+
+---
+
+# Section 1: Task Description (Node A)
+
+**Objective:** Generate the **C/C++ Firmware (Micro-ROS + FreeRTOS)** for **Node A (RPi Pico)** inside `software/pico_firmware/`.
+
+**Specific Requirements:**
+
+1.  **Core Architecture:**
+    * **OS:** FreeRTOS (SMP enabled on Core 0 & 1).
+    * **Comm:** Micro-ROS over USB-CDC (Serial).
+    * **QoS:** Configure Micro-ROS Executors/Publishers to use **Best Effort** policy to match the host.
+
+2.  **Tasks & Scheduling:**
+    * `task_control` (Core 1, High Prio, 400Hz):
+        * Read BNO055 (I2C).
+        * Read ESC Telemetry (UART/PIO).
+        * Write DShot Commands (PIO).
+    * `task_microros` (Core 0, Medium Prio):
+        * Publish `/pico/imu_raw` and `/pico/esc_telemetry`.
+        * Subscribe to `/pico/motor_commands`.
+
+3.  **Safety Logic (Critical):**
+    * **Watchdog:** If `/pico/motor_commands` is not received for >100ms, immediately force all DShot outputs to 0.
+    * **Scope:** This node ONLY controls the 6 Motors. Servos are handled by Node B.
+
+4.  **Drivers:**
+    * Use PIO (Programmable I/O) for DShot600 generation (6 channels).
+    * Use PIO for Telemetry RX (6 channels) if UART hardware is insufficient.
+    * Configure BNO055 in RAW mode (no internal fusion).
+
+5.  **Output:**
+    * `CMakeLists.txt` (Standard Pico SDK + Micro-ROS).
+    * `main.c` (Entry point).
+    * `pico_node.c` (Application logic).

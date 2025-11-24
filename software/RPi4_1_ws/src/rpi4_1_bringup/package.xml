@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>rpi4_1_bringup</name>
+  <version>0.0.1</version>
+  <description>Bringup package for ALTAIR Drone Node B (RPi 4 #1)</description>
+  <maintainer email="developer@altair.com">ALTAIR Developer</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>actuator_bridge</exec_depend>
+  <exec_depend>sensor_processing</exec_depend>
+  <exec_depend>robot_localization</exec_depend>
+  <exec_depend>micro_ros_agent</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

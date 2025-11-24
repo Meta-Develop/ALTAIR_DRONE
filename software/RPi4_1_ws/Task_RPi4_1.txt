@@ -1,0 +1,73 @@
+# Section 0: System Architecture & Master Context (STRICT)
+
+**Project:** ALTAIR Hexacopter Control System
+**Type:** Voliro-type (Fully Actuated 12-DOF)
+**Goal:** Develop a distributed control system for the ALTAIR drone.
+
+## 0.1 Directory Structure (Root: `~/altair_project/`)
+All code must assume this relative path structure.
+* `software/`
+    * `common/` (Shared resources)
+        * `altair_description/` (URDF package)
+    * `pico_firmware/` (Node A)
+    * `RPi4_1_ws/` (**Target for this task**)
+        * `src/`
+    * `RPi4_2_ws/` (Node C workspace)
+    * `gcs_tools_ws/` (PC workspace)
+
+## 0.2 Node Roles & Hardware
+* **Node A: RPi Pico (IO Hub)**
+    * **Role:** Real-time IO (Motors/IMU). Connected via USB.
+* **Node B: RPi 4 #1 (Bridge)** [Target]
+    * **Role:** Sensor Fusion, Actuator Dispatching, GCS Communication.
+    * **HW:** RPi 4, U2D2 (for Dynamixel Servos), Wi-Fi.
+    * **IP:** 192.168.10.1
+* **Node C: RPi 4 #2 (Controller)**
+    * **Role:** NMPC / PID Control.
+* **Node GCS: PC**
+    * **Role:** Human Interface.
+
+## 0.3 ROS 2 Interface Specifications & QoS
+**QoS Policy:** "SensorData" = Best Effort, Volatile. "Reliable" = Guaranteed.
+
+| Topic Name | From | To | Type | Size | QoS | Notes |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `/control/actuator_commands` | Node C | Node B | `Float32MultiArray` | 12 | SensorData | [M1..6, S1..6] |
+| `/control/manual_override` | GCS | Node B | `Float32MultiArray` | 12 | Reliable | Maintenance |
+| `/pico/motor_commands` | Node B | Node A | `Float32MultiArray` | 6 | SensorData | Thrust |
+| `/pico/imu_raw` | Node A | Node B | `sensor_msgs/Imu` | - | SensorData | RAW |
+| `/pico/esc_telemetry` | Node A | Node B | `Float32MultiArray` | 6 | SensorData | RPM |
+| `/odometry/filtered` | Node B | Node C | `nav_msgs/Odometry` | - | SensorData | EKF |
+
+---
+
+# Section 1: Task Description (Node B)
+
+**Objective:** Generate the **ROS 2 C++ Packages** for **Node B** inside `software/RPi4_1_ws/src/`.
+
+**Specific Requirements:**
+
+1.  **Package: `actuator_bridge`**
+    * **Inputs:** Subscribe to `/control/actuator_commands` AND `/control/manual_override`.
+    * **Logic (Safety Mux):**
+        * Implement a state machine. If "Maintenance Mode" is active (via flag or topic presence), ignore Node C and use GCS data.
+        * **Splitting:**
+            * First 6 values (Motors) -> Publish to `/pico/motor_commands`.
+            * Last 6 values (Servos) -> Write to Dynamixel Servos using `dynamixel_sdk`.
+    * **Failsafe:** If ALL inputs are silent for >100ms, send 0 Thrust to Pico and 0 Rad (Home) to Servos.
+
+2.  **Package: `sensor_processing`**
+    * **Inputs:** `/pico/imu_raw` and `/pico/esc_telemetry`.
+    * **Processing:** Apply a dynamic Notch Filter to the IMU gyro data based on the real-time RPM (telemetry).
+    * **Output:** Publish `/imu/filtered` (to be used by `robot_localization` EKF).
+
+3.  **QoS & Setup:**
+    * Use `rclcpp::SensorDataQoS()` for all high-frequency topics to avoid latency buildup.
+    * Provide a launch file `bridge.launch.py` that starts:
+        * `micro_ros_agent` (Serial UDP).
+        * `actuator_bridge` node.
+        * `sensor_processing` node.
+        * `ekf_node` (robot_localization).
+
+4.  **System Optimization:**
+    * Provide a bash script to set `isolcpus=2,3` (dedicate cores to ROS) and set USB latency timer to 1ms for U2D2.

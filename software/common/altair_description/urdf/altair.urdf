@@ -1,0 +1,45 @@
+<?xml version="1.0"?>
+<robot name="altair_hexacopter">
+
+  <!-- Base Link (Body) -->
+  <link name="base_link">
+    <inertial>
+      <mass value="2.0"/> <!-- 2.0 kg estimate -->
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <inertia ixx="0.05" ixy="0" ixz="0" iyy="0.05" iyz="0" izz="0.1"/>
+    </inertial>
+    <visual>
+      <geometry>
+        <cylinder length="0.05" radius="0.2"/>
+      </geometry>
+      <material name="white">
+        <color rgba="1 1 1 1"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <cylinder length="0.05" radius="0.2"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Placeholder for 6 Rotors to satisfy any future parsing logic -->
+  <!-- Arm 1 (0 deg) -->
+  <link name="rotor_1">
+    <visual>
+        <geometry><cylinder length="0.01" radius="0.1"/></geometry>
+        <material name="black"><color rgba="0 0 0 1"/></material>
+    </visual>
+  </link>
+  <joint name="rotor_1_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="rotor_1"/>
+    <origin rpy="0 0 0" xyz="0.25 0 0"/>
+  </joint>
+
+  <!-- Additional arms can be added here. 
+       For now, the controller code mostly reads mass/inertia from base_link 
+       and calculates allocation matrix mathematically based on hardcoded geometry. 
+  -->
+
+</robot>
