@@ -31,7 +31,7 @@ The current deployment is running in **Emulation Mode**. The following hardware 
 - [ ] **Verify Telemetry**:
     - Check `/pico/imu_raw` is publishing valid data.
     - Check `/pico/esc_telemetry` is publishing RPMs.
-- [ ] **Build & Flash Pico Firmware**:
+- [x] **Build & Flash Pico Firmware**:
     - The current Pico might not have the correct firmware.
     - Build `software/pico_firmware` using the Pico SDK.
     - Flash the `.uf2` file to the Pico.
