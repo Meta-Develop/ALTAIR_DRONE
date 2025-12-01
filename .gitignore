@@ -1,0 +1,17 @@
+# Build Directories
+build/
+build_new/
+install/
+log/
+
+# IDE/Editor
+.vscode/
+.idea/
+*.swp
+
+# Python
+__pycache__/
+*.pyc
+
+# ROS 2
+COLCON_IGNORE
