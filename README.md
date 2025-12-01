@@ -22,22 +22,6 @@ The system consists of three main nodes:
 ## Installation
 
 ### Prerequisites
-*   ROS 2 Humble
-*   Micro-ROS Agent
-*   Raspberry Pi Pico SDK
-
-### Build Instructions
-
-1.  **Clone the repository**:
-    ```bash
-    git clone https://github.com/your-org/ALTAIR_DRONE.git
-    cd ALTAIR_DRONE
-    ```
-
-2.  **Build Pico Firmware (Node A)**:
-    ```bash
-    cd software/pico_firmware
-    mkdir build && cd build
     cmake ..
     make
     ```

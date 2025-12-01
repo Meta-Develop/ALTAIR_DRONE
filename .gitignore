@@ -15,3 +15,5 @@ __pycache__/
 
 # ROS 2
 COLCON_IGNORE
+
+NEXT_SESSION_CONTEXT.md
