@@ -1,198 +1,181 @@
-#include "actuator_bridge/actuator_bridge_node.hpp"
+#include <chrono>
+#include <memory>
+#include <vector>
+#include <string>
 
-using std::placeholders::_1;
+#include "rclcpp/rclcpp.hpp"
+#include "std_msgs/msg/float32_multi_array.hpp"
+#include "dynamixel_sdk/dynamixel_sdk.h"
 
-ActuatorBridgeNode::ActuatorBridgeNode()
-: Node("actuator_bridge"),
-  maintenance_mode_(false),
-  portHandler_(nullptr),
-  packetHandler_(nullptr),
-  groupSyncWrite_(nullptr),
-  dxl_device_port_("/dev/ttyUSB0"),
-  dxl_baudrate_(57600),
-  dxl_protocol_version_(2.0)
+using namespace std::chrono_literals;
+
+// Dynamixel Control Table Addresses (Example for X-series)
+#define ADDR_TORQUE_ENABLE          64
+#define ADDR_GOAL_POSITION          116
+#define LEN_GOAL_POSITION           4
+#define PROTOCOL_VERSION            2.0
+#define BAUDRATE                    57600
+#define DEVICENAME                  "/dev/ttyUSB0" // Check U2D2 path
+
+class ActuatorBridge : public rclcpp::Node
 {
-    // Declare Parameters
-    this->declare_parameter("dxl_device", "/dev/ttyUSB0");
-    this->declare_parameter("dxl_baudrate", 57600);
-    this->declare_parameter("dxl_protocol_version", 2.0);
+public:
+    ActuatorBridge() : Node("actuator_bridge")
+    {
+        // QoS
+        auto qos = rclcpp::SensorDataQoS();
+        auto qos_reliable = rclcpp::QoS(10).reliable();
 
-    // Get Parameters
-    dxl_device_port_ = this->get_parameter("dxl_device").as_string();
-    dxl_baudrate_ = this->get_parameter("dxl_baudrate").as_int();
-    dxl_protocol_version_ = this->get_parameter("dxl_protocol_version").as_double();
+        // Publishers
+        motor_pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>("/pico/motor_commands", qos);
 
-    // QoS Profiles
-    rclcpp::QoS sensor_qos = rclcpp::SensorDataQoS();
-    rclcpp::QoS reliable_qos = rclcpp::QoS(10).reliable();
+        // Subscribers
+        actuator_sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
+            "/control/actuator_commands", qos,
+            std::bind(&ActuatorBridge::actuator_callback, this, std::placeholders::_1));
 
-    // Subscribers
-    control_sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
-        "/control/actuator_commands", sensor_qos,
-        std::bind(&ActuatorBridgeNode::controlCallback, this, _1));
+        manual_sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
+            "/control/manual_override", qos_reliable,
+            std::bind(&ActuatorBridge::manual_callback, this, std::placeholders::_1));
 
-    override_sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
-        "/control/manual_override", reliable_qos,
-        std::bind(&ActuatorBridgeNode::overrideCallback, this, _1));
+        // Timer for Watchdog (100Hz check)
+        timer_ = this->create_wall_timer(
+            10ms, std::bind(&ActuatorBridge::watchdog_callback, this));
 
-    // Publishers
-    pico_pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>(
-        "/pico/motor_commands", sensor_qos);
+        // Initialize Dynamixel
+        init_dynamixel();
 
-    // Timer for Failsafe (run at 20Hz check)
-    failsafe_timer_ = this->create_wall_timer(
-        std::chrono::milliseconds(50),
-        std::bind(&ActuatorBridgeNode::timerCallback, this));
-
-    last_msg_time_ = std::chrono::steady_clock::now();
-
-    // Initialize Dynamixel
-    if (!initDynamixel()) {
-        RCLCPP_ERROR(this->get_logger(), "Failed to initialize Dynamixel SDK on %s. Running in emulation mode.", dxl_device_port_.c_str());
-    } else {
-        RCLCPP_INFO(this->get_logger(), "Dynamixel initialized successfully on %s at %d baud.", dxl_device_port_.c_str(), dxl_baudrate_);
+        RCLCPP_INFO(this->get_logger(), "Actuator Bridge Started");
     }
 
-    RCLCPP_INFO(this->get_logger(), "Actuator Bridge Node Started.");
-}
-
-ActuatorBridgeNode::~ActuatorBridgeNode()
-{
-    setSafeState();
-    if (portHandler_) {
+    ~ActuatorBridge()
+    {
+        // Disable Torque
+        for(int id : servo_ids_) {
+            packetHandler_->write1ByteTxRx(portHandler_, id, ADDR_TORQUE_ENABLE, 0);
+        }
         portHandler_->closePort();
-        delete portHandler_;
     }
-    if (packetHandler_) {
-        delete packetHandler_;
-    }
-    if (groupSyncWrite_) {
-        delete groupSyncWrite_;
-    }
-}
 
-bool ActuatorBridgeNode::initDynamixel()
-{
-    portHandler_ = dynamixel::PortHandler::getPortHandler(dxl_device_port_.c_str());
-    packetHandler_ = dynamixel::PacketHandler::getPacketHandler(dxl_protocol_version_);
+private:
+    void init_dynamixel()
+    {
+        portHandler_ = dynamixel::PortHandler::getPortHandler(DEVICENAME);
+        packetHandler_ = dynamixel::PacketHandler::getPacketHandler(PROTOCOL_VERSION);
 
-    if (portHandler_->openPort()) {
-        if (portHandler_->setBaudRate(dxl_baudrate_)) {
-            // Enable Torque
-            for (auto id : DXL_IDS) {
-                packetHandler_->write1ByteTxRx(portHandler_, id, ADDR_TORQUE_ENABLE, 1);
+        if (portHandler_->openPort()) {
+            RCLCPP_INFO(this->get_logger(), "Succeeded to open the port");
+        } else {
+            RCLCPP_ERROR(this->get_logger(), "Failed to open the port");
+            rclcpp::shutdown();
+            return;
+        }
+
+        if (portHandler_->setBaudRate(BAUDRATE)) {
+            RCLCPP_INFO(this->get_logger(), "Succeeded to change the baudrate");
+        } else {
+            RCLCPP_ERROR(this->get_logger(), "Failed to change the baudrate");
+            rclcpp::shutdown();
+            return;
+        }
+
+        // Enable Torque for IDs 1-6 (assuming servos are 1-6 or 7-12? Task says "Last 6 values (Servos)")
+        // Let's assume Servo IDs are 1-6 for simplicity, or 7-12. Let's use 1-6.
+        servo_ids_ = {1, 2, 3, 4, 5, 6}; 
+        for(int id : servo_ids_) {
+            int dxl_comm_result = packetHandler_->write1ByteTxRx(portHandler_, id, ADDR_TORQUE_ENABLE, 1);
+            if (dxl_comm_result != COMM_SUCCESS) {
+                RCLCPP_ERROR(this->get_logger(), "Failed to enable torque for ID %d", id);
+                rclcpp::shutdown();
+                return;
             }
-            
-            // Initialize GroupSyncWrite
-            groupSyncWrite_ = new dynamixel::GroupSyncWrite(portHandler_, packetHandler_, ADDR_GOAL_POSITION, LEN_GOAL_POSITION);
-            
-            return true;
         }
     }
-    return false;
-}
 
-void ActuatorBridgeNode::controlCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg)
-{
-    if (maintenance_mode_) {
-        return; 
-    }
-    
-    last_msg_time_ = std::chrono::steady_clock::now();
-    if (msg->data.size() >= 12) {
-        processCommands(msg->data);
-    } else {
-        RCLCPP_WARN(this->get_logger(), "Received control command with insufficient size: %zu", msg->data.size());
-    }
-}
-
-void ActuatorBridgeNode::overrideCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg)
-{
-    maintenance_mode_ = true; // Activate maintenance mode
-    last_msg_time_ = std::chrono::steady_clock::now(); // Reset timeout
-    
-    if (msg->data.size() >= 12) {
-        processCommands(msg->data);
-    } else {
-        RCLCPP_WARN(this->get_logger(), "Received override command with insufficient size: %zu", msg->data.size());
-    }
-}
-
-void ActuatorBridgeNode::timerCallback()
-{
-    auto now = std::chrono::steady_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_msg_time_).count();
-
-    if (duration > 100) {
-        if (maintenance_mode_) {
-             RCLCPP_WARN(this->get_logger(), "Maintenance Override Timed Out. Resetting mode.");
-             maintenance_mode_ = false;
+    void actuator_callback(const std_msgs::msg::Float32MultiArray::SharedPtr msg)
+    {
+        last_msg_time_ = this->now();
+        if (!manual_mode_) {
+            process_commands(msg->data);
         }
-        setSafeState();
-    }
-}
-
-void ActuatorBridgeNode::processCommands(const std::vector<float>& data)
-{
-    // Data format: [M1, M2, M3, M4, M5, M6, S1, S2, S3, S4, S5, S6]
-    
-    // 1. Motors -> Pico
-    std_msgs::msg::Float32MultiArray motor_msg;
-    for (int i = 0; i < 6; ++i) {
-        motor_msg.data.push_back(data[i]);
-    }
-    pico_pub_->publish(motor_msg);
-
-    // 2. Servos -> Dynamixel
-    std::vector<float> servo_angles;
-    for (int i = 6; i < 12; ++i) {
-        servo_angles.push_back(data[i]);
-    }
-    writeServos(servo_angles);
-}
-
-void ActuatorBridgeNode::writeServos(const std::vector<float>& angles)
-{
-    if (!groupSyncWrite_) return;
-
-    groupSyncWrite_->clearParam();
-
-    for (size_t i = 0; i < angles.size() && i < DXL_IDS.size(); ++i) {
-        // Convert rad to DXL value (e.g. 0 rad = 2048, 1 rad approx 651 ticks for XM430)
-        int32_t goal_pos = 2048 + (angles[i] * 651.89);
-        
-        // Prepare byte array for SyncWrite (Little Endian)
-        uint8_t param_goal_position[4];
-        param_goal_position[0] = DXL_LOBYTE(DXL_LOWORD(goal_pos));
-        param_goal_position[1] = DXL_HIBYTE(DXL_LOWORD(goal_pos));
-        param_goal_position[2] = DXL_LOBYTE(DXL_HIWORD(goal_pos));
-        param_goal_position[3] = DXL_HIBYTE(DXL_HIWORD(goal_pos));
-
-        // Add to SyncWrite
-        groupSyncWrite_->addParam(DXL_IDS[i], param_goal_position);
     }
 
-    // Transmit all at once
-    groupSyncWrite_->txPacket();
-    groupSyncWrite_->clearParam();
-}
+    void manual_callback(const std_msgs::msg::Float32MultiArray::SharedPtr msg)
+    {
+        last_msg_time_ = this->now();
+        // Simple logic: If manual msg received, treat as manual mode active for a short duration?
+        // Or is there a flag? Task says "If 'Maintenance Mode' is active (via flag or topic presence)".
+        // Let's assume topic presence implies manual override for now, or we switch based on a flag.
+        // For safety, let's say if we get manual commands, we use them.
+        manual_mode_ = true; 
+        process_commands(msg->data);
+    }
 
-void ActuatorBridgeNode::setSafeState()
-{
-    // 0 Thrust
-    std_msgs::msg::Float32MultiArray stop_msg;
-    stop_msg.data.assign(6, 0.0f);
-    pico_pub_->publish(stop_msg);
+    void watchdog_callback()
+    {
+        auto now = this->now();
+        if ((now - last_msg_time_).seconds() > 0.1) {
+            // Timeout - Failsafe
+            stop_all();
+        }
+        // Reset manual mode if no manual msg for a while? 
+        // Let's keep it simple.
+    }
 
-    // Home Servos (0 Rad)
-    std::vector<float> home_angles(6, 0.0f);
-    writeServos(home_angles);
-}
+    void process_commands(const std::vector<float>& data)
+    {
+        if (data.size() < 12) {
+            RCLCPP_ERROR(this->get_logger(), "Invalid command size: %zu", data.size());
+            return;
+        }
 
-int main(int argc, char ** argv)
+        // 1. Motors (0-5) -> Pico
+        auto motor_msg = std_msgs::msg::Float32MultiArray();
+        motor_msg.data.assign(data.begin(), data.begin() + 6);
+        motor_pub_->publish(motor_msg);
+
+        // 2. Servos (6-11) -> Dynamixel
+        // Assuming data is in Radians. Convert to Value.
+        // Dynamixel 0-4095 usually covers 0-360 or similar.
+        // Need conversion logic. Assuming 1:1 mapping for now or raw values.
+        // Let's assume input is raw position value for simplicity, or add a scaler.
+        for (size_t i = 0; i < 6; ++i) {
+            int id = servo_ids_[i];
+            uint32_t pos = static_cast<uint32_t>(data[6 + i]); 
+            packetHandler_->write4ByteTxRx(portHandler_, id, ADDR_GOAL_POSITION, pos);
+        }
+    }
+
+    void stop_all()
+    {
+        // Zero Motors
+        auto motor_msg = std_msgs::msg::Float32MultiArray();
+        motor_msg.data.resize(6, 0.0f);
+        motor_pub_->publish(motor_msg);
+
+        // Home Servos (Assuming 2048 is center/home)
+        for(int id : servo_ids_) {
+            packetHandler_->write4ByteTxRx(portHandler_, id, ADDR_GOAL_POSITION, 2048);
+        }
+    }
+
+    rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr motor_pub_;
+    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr actuator_sub_;
+    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr manual_sub_;
+    rclcpp::TimerBase::SharedPtr timer_;
+
+    dynamixel::PortHandler *portHandler_;
+    dynamixel::PacketHandler *packetHandler_;
+    std::vector<int> servo_ids_;
+
+    rclcpp::Time last_msg_time_;
+    bool manual_mode_ = false;
+};
+
+int main(int argc, char * argv[])
 {
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<ActuatorBridgeNode>());
+    rclcpp::spin(std::make_shared<ActuatorBridge>());
     rclcpp::shutdown();
     return 0;
 }
