@@ -31,6 +31,7 @@ The current deployment is running in **Emulation Mode**. The following hardware 
 - [ ] **Verify Telemetry**:
     - Check `/pico/imu_raw` is publishing valid data.
     - Check `/pico/esc_telemetry` is publishing RPMs.
+    - **Run `python3 software/RPi4_1_ws/verify_telemetry.py`**.
 - [x] **Build & Flash Pico Firmware**:
     - The current Pico might not have the correct firmware.
     - Build `software/pico_firmware` using the Pico SDK.
