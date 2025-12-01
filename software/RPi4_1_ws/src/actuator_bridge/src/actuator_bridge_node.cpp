@@ -103,11 +103,11 @@ private:
     void manual_callback(const std_msgs::msg::Float32MultiArray::SharedPtr msg)
     {
         last_msg_time_ = this->now();
-        // Simple logic: If manual msg received, treat as manual mode active for a short duration?
-        // Or is there a flag? Task says "If 'Maintenance Mode' is active (via flag or topic presence)".
-        // Let's assume topic presence implies manual override for now, or we switch based on a flag.
-        // For safety, let's say if we get manual commands, we use them.
-        manual_mode_ = true; 
+        last_manual_time_ = this->now();
+        if (!manual_mode_) {
+            manual_mode_ = true;
+            RCLCPP_INFO(this->get_logger(), "Manual Override Engaged");
+        }
         process_commands(msg->data);
     }
 
@@ -118,8 +118,12 @@ private:
             // Timeout - Failsafe
             stop_all();
         }
-        // Reset manual mode if no manual msg for a while? 
-        // Let's keep it simple.
+        
+        // Reset manual mode if no manual msg for 1.0s
+        if (manual_mode_ && (now - last_manual_time_).seconds() > 1.0) {
+            manual_mode_ = false;
+            RCLCPP_INFO(this->get_logger(), "Manual Override Timed Out - Reverting to Auto");
+        }
     }
 
     void process_commands(const std::vector<float>& data)
@@ -169,6 +173,7 @@ private:
     std::vector<int> servo_ids_;
 
     rclcpp::Time last_msg_time_;
+    rclcpp::Time last_manual_time_;
     bool manual_mode_ = false;
 };
 

@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "pico/stdlib.h"
 #include "hardware/i2c.h"
 
 #define BNO055_ADDR 0x28 // Default I2C address

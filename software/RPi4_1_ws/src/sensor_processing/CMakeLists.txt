@@ -10,26 +10,18 @@ find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 
-include_directories(include)
-
-add_executable(sensor_processing_node src/sensor_processing_node.cpp)
-target_include_directories(sensor_processing_node PUBLIC
+add_executable(notch_filter_node src/notch_filter_node.cpp)
+target_include_directories(notch_filter_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-ament_target_dependencies(sensor_processing_node
+target_compile_features(notch_filter_node PUBLIC cxx_std_17)
+ament_target_dependencies(notch_filter_node
   rclcpp
   sensor_msgs
   std_msgs
 )
 
-install(TARGETS sensor_processing_node
+install(TARGETS notch_filter_node
   DESTINATION lib/${PROJECT_NAME})
-
-if(BUILD_TESTING)
-  find_package(ament_lint_auto REQUIRED)
-  set(ament_cmake_copyright_FOUND TRUE)
-  set(ament_cmake_cpplint_FOUND TRUE)
-  ament_lint_auto_find_test_dependencies()
-endif()
 
 ament_package()

@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include "pico/stdlib.h"
+#include <uxr/client/transport.h>
 
 bool pico_serial_transport_open(struct uxrCustomTransport * transport);
 bool pico_serial_transport_close(struct uxrCustomTransport * transport);

@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include "drivers/dshot.h"
 #include "drivers/bno055.h"
+#include "drivers/telemetry.h"
 
 #include <rcl/rcl.h>
 #include <rcl/error_handling.h>
@@ -45,6 +46,16 @@ void motor_callback(const void * msgin) {
 
 void task_control(void *params) {
     dshot_init();
+    // Initialize Telemetry (PIO 0, SM 2 - DShot uses SM 0,1 if needed, or 0-3?)
+    // DShot uses 1 SM per motor? No, dshot.c uses 1 SM per motor?
+    // dshot.c: "PIO current_pio = (i < 4) ? pio0 : pio1;"
+    // Motors 0-3 use pio0 SM 0-3.
+    // Motors 4-5 use pio1 SM 0-1.
+    // So pio0 is FULL.
+    // We must use pio1 for telemetry.
+    // pio1 has SM 2,3 free.
+    telemetry_init(pio1, 2);
+
     bno055_init(i2c0, 0, 1); // I2C0, SDA=GP0, SCL=GP1
 
     TickType_t xLastWakeTime = xTaskGetTickCount();
@@ -57,17 +68,20 @@ void task_control(void *params) {
         bno055_data_t imu_raw = {0};
         bool imu_ok = bno055_read_raw(&imu_raw);
         
-        // (Telemetry read placeholder)
-        float rpm_values[6] = {0}; 
-        // TODO: Implement PIO UART RX for telemetry
-
-        // Update Shared Sensor State
+        // Round-Robin Telemetry
+        static int telem_idx = 0;
+        float rpm = telemetry_read_rpm(pio1, 2, telem_idx);
+        
+        // Store
         xSemaphoreTake(g_sensor_mutex, portMAX_DELAY);
         if (imu_ok) {
             g_sensor_state.imu = imu_raw;
         }
-        for(int i=0; i<6; i++) g_sensor_state.esc_rpm[i] = rpm_values[i];
+        g_sensor_state.esc_rpm[telem_idx] = rpm;
         xSemaphoreGive(g_sensor_mutex);
+
+        // Advance index
+        telem_idx = (telem_idx + 1) % 6;
 
         // 2. Watchdog & Motor Output
         xSemaphoreTake(g_motor_mutex, portMAX_DELAY);
@@ -180,7 +194,28 @@ void pico_node_init(void) {
     xTaskCreate(task_control, "Control", 1024, NULL, tskIDLE_PRIORITY + 2, &control_handle);
     
     // Set Affinity to Core 1 (Mask 2 -> bit 1 set)
+    #if configUSE_CORE_AFFINITY
     vTaskCoreAffinitySet(control_handle, (1 << 1));
+    #endif
 
     xTaskCreate(task_microros, "MicroROS", 2048, NULL, tskIDLE_PRIORITY + 1, NULL);
+}
+
+// --- Hooks & Compatibility ---
+
+void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName) {
+    (void)xTask;
+    (void)pcTaskName;
+    panic("Stack Overflow: %s\n", pcTaskName);
+}
+
+#include <time.h>
+#include <sys/time.h>
+
+int clock_gettime(clockid_t clock_id, struct timespec *tp) {
+    (void)clock_id;
+    uint64_t now_us = time_us_64();
+    tp->tv_sec = now_us / 1000000;
+    tp->tv_nsec = (now_us % 1000000) * 1000;
+    return 0;
 }

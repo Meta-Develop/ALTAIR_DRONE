@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>altair_bringup</name>
+  <version>0.0.1</version>
+  <description>Launch files for ALTAIR drone Node B</description>
+  <maintainer email="altair@example.com">Altair Dev</maintainer>
+  <license>TODO</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>actuator_bridge</exec_depend>
+  <exec_depend>sensor_processing</exec_depend>
+  <exec_depend>micro_ros_agent</exec_depend>
+  <exec_depend>robot_localization</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
