@@ -1,6 +1,6 @@
 # ALTAIR Hexacopter Control System
 
-A distributed control system for a fully actuated 12-DOF hexacopter (Voliro-type), built with ROS 2 Humble and Raspberry Pi Pico.
+A comprehensive project for a fully actuated 12-DOF hexacopter (Voliro-type), providing the complete **Mechanical Design**, **Electrical Schematics**, and **Distributed Control Software**.
 
 ## System Overview
 
