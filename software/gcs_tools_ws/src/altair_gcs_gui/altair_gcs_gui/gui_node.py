@@ -13,6 +13,7 @@ from std_msgs.msg import Float32MultiArray
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Joy
 from nav_msgs.msg import Odometry
+import math
 
 # --- Main GCS Node ---
 class AltairGCSNode(Node):
@@ -60,6 +61,33 @@ class AltairGCSNode(Node):
     def odom_callback(self, msg):
         pos = msg.pose.pose.position
         self.worker_signals.odometry_signal.emit(pos.x, pos.y, pos.z)
+
+        # Calculate Attitude (Roll, Pitch, Yaw) from Quaternion
+        q = msg.pose.pose.orientation
+        
+        # Roll (x-axis rotation)
+        sinr_cosp = 2 * (q.w * q.x + q.y * q.z)
+        cosr_cosp = 1 - 2 * (q.x * q.x + q.y * q.y)
+        roll = math.atan2(sinr_cosp, cosr_cosp)
+
+        # Pitch (y-axis rotation)
+        sinp = 2 * (q.w * q.y - q.z * q.x)
+        if abs(sinp) >= 1:
+            pitch = math.copysign(math.pi / 2, sinp) # use 90 degrees if out of range
+        else:
+            pitch = math.asin(sinp)
+
+        # Yaw (z-axis rotation)
+        siny_cosp = 2 * (q.w * q.z + q.x * q.y)
+        cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
+        yaw = math.atan2(siny_cosp, cosy_cosp)
+
+        # Emit degrees
+        self.worker_signals.attitude_signal.emit(
+            math.degrees(roll), 
+            math.degrees(pitch), 
+            math.degrees(yaw)
+        )
 
     def joy_callback(self, msg):
         # Map joy to cmd_vel
@@ -117,6 +145,7 @@ class MainWindow(QMainWindow):
 
         # Indicators
         self.lbl_pos = QLabel("Position: X=0.00, Y=0.00, Z=0.00")
+        self.lbl_att = QLabel("Attitude: R=0.00, P=0.00, Y=0.00")
         self.lbl_battery = QLabel("Battery: N/A") # Placeholder
         
         # Joy Indicators (Progress bars for axes)
@@ -135,6 +164,7 @@ class MainWindow(QMainWindow):
         joy_group.setLayout(joy_layout)
 
         layout.addWidget(self.lbl_pos)
+        layout.addWidget(self.lbl_att)
         layout.addWidget(self.lbl_battery)
         layout.addWidget(joy_group)
         layout.addStretch()
@@ -218,6 +248,9 @@ class MainWindow(QMainWindow):
     def update_odometry(self, x, y, z):
         self.lbl_pos.setText(f"Position: X={x:.2f}, Y={y:.2f}, Z={z:.2f}")
 
+    def update_attitude(self, r, p, y):
+        self.lbl_att.setText(f"Attitude: R={r:.2f}, P={p:.2f}, Y={y:.2f}")
+
     def update_joy(self, axes, buttons):
         # Update Joy bars
         for i, bar in enumerate(self.joy_bars):
@@ -235,6 +268,7 @@ def main(args=None):
     class Signals(QObject):
         telemetry_signal = pyqtSignal(list)
         odometry_signal = pyqtSignal(float, float, float)
+        attitude_signal = pyqtSignal(float, float, float)
         joy_signal = pyqtSignal(list, list)
     
     signals = Signals()
@@ -245,6 +279,7 @@ def main(args=None):
     # Connect signals
     signals.telemetry_signal.connect(window.update_telemetry)
     signals.odometry_signal.connect(window.update_odometry)
+    signals.attitude_signal.connect(window.update_attitude)
     signals.joy_signal.connect(window.update_joy)
     
     # Thread for ROS spin
