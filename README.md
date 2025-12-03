@@ -1,6 +1,6 @@
 # ALTAIR: 12-DOF Fully Actuated Hexacopter Project
 
-A comprehensive project for a fully actuated 12-DOF hexacopter (Voliro-type), providing the complete **Mechanical Design**, **Electrical Schematics**, and **Distributed Control Software**.
+A comprehensive project for a fully actuated 12-DOF hexacopter (Voliro-type), providing the complete mechanical design, electrical schematics, and distributed control software.
 
 ## System Overview
 
