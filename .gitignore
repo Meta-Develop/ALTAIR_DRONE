@@ -1,6 +1,7 @@
 # Build Directories
 build/
 build_new/
+temp_build/
 install/
 log/
 
@@ -16,4 +17,4 @@ __pycache__/
 # ROS 2
 COLCON_IGNORE
 
-NEXT_SESSION_CONTEXT.md
+PROJECT_TASKS.md
