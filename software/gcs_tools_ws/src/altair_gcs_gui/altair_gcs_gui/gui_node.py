@@ -6,10 +6,11 @@ from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QTabWidget, QLabel, QSlider, QCheckBox, 
-                             QProgressBar, QGridLayout, QGroupBox)
+                             QProgressBar, QGridLayout, QGroupBox, QPushButton, QFrame, QStyleFactory)
 from PyQt5.QtCore import Qt, pyqtSignal, QObject, QTimer
+from PyQt5.QtGui import QColor, QPalette, QFont
 
-from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Float32MultiArray, Int8
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Joy
 from nav_msgs.msg import Odometry
@@ -36,6 +37,8 @@ class AltairGCSNode(Node):
         # Publishers
         self.pub_cmd_vel = self.create_publisher(Twist, '/cmd_vel', qos_reliable)
         self.pub_manual_override = self.create_publisher(Float32MultiArray, '/control/manual_override', qos_reliable)
+        self.pub_pico_mode = self.create_publisher(Int8, '/pico/mode', qos_reliable)
+        self.pub_control_mode = self.create_publisher(Int8, '/control/mode', qos_reliable)
 
         # Subscribers
         self.sub_esc_telemetry = self.create_subscription(
@@ -45,7 +48,7 @@ class AltairGCSNode(Node):
             Odometry, '/odometry/filtered', self.odom_callback, qos_sensor)
 
         self.sub_joy = self.create_subscription(
-            Joy, '/joy', self.joy_callback, qos_sensor) # Joy is usually sensor data? or Reliable? Usually SensorData or System default.
+            Joy, '/joy', self.joy_callback, qos_sensor)
 
         # Internal State
         self.manual_override_active = False
@@ -90,19 +93,11 @@ class AltairGCSNode(Node):
         )
 
     def joy_callback(self, msg):
-        # Map joy to cmd_vel
-        # Simple mapping: Axis 1->LinX, Axis 0->LinY, Axis 3->AngZ, Axis 4->LinZ (Example)
-        # Also update GUI indicators
         self.worker_signals.joy_signal.emit(list(msg.axes), list(msg.buttons))
         
         if not self.manual_override_active:
             twist = Twist()
             # Basic mapping assumption (Xbox controller standard)
-            # Left Stick Y (1) -> Linear X
-            # Left Stick X (0) -> Linear Y
-            # Right Stick X (3) -> Angular Z
-            # Right Stick Y (4) -> Linear Z (Throttle-ish?) or Buttons?
-            # Let's assume simple 4-axis control
             if len(msg.axes) >= 4:
                 twist.linear.x = msg.axes[1] * 2.0 # Scale factor
                 twist.linear.y = msg.axes[0] * 2.0 
@@ -118,13 +113,28 @@ class AltairGCSNode(Node):
             msg.data = self.override_values
             self.pub_manual_override.publish(msg)
 
+    def set_pico_mode(self, mode):
+        msg = Int8()
+        msg.data = mode
+        self.pub_pico_mode.publish(msg)
+        self.get_logger().info(f"Published Pico Mode: {mode}")
+
+    def set_control_mode(self, mode):
+        msg = Int8()
+        msg.data = mode
+        self.pub_control_mode.publish(msg)
+        self.get_logger().info(f"Published Control Mode: {mode}")
+
 # --- Main Window ---
 class MainWindow(QMainWindow):
     def __init__(self, node):
         super().__init__()
         self.node = node
         self.setWindowTitle("ALTAIR Hexacopter GCS")
-        self.resize(800, 600)
+        self.resize(1000, 700)
+
+        # Apply Dark Theme
+        self.apply_dark_theme()
 
         # Tabs
         self.tabs = QTabWidget()
@@ -139,16 +149,83 @@ class MainWindow(QMainWindow):
         self.override_timer.timeout.connect(self.publish_override_timer)
         self.override_timer.start(100)
 
+    def apply_dark_theme(self):
+        QApplication.setStyle(QStyleFactory.create("Fusion"))
+        palette = QPalette()
+        palette.setColor(QPalette.Window, QColor(53, 53, 53))
+        palette.setColor(QPalette.WindowText, Qt.white)
+        palette.setColor(QPalette.Base, QColor(25, 25, 25))
+        palette.setColor(QPalette.AlternateBase, QColor(53, 53, 53))
+        palette.setColor(QPalette.ToolTipBase, Qt.white)
+        palette.setColor(QPalette.ToolTipText, Qt.white)
+        palette.setColor(QPalette.Text, Qt.white)
+        palette.setColor(QPalette.Button, QColor(53, 53, 53))
+        palette.setColor(QPalette.ButtonText, Qt.white)
+        palette.setColor(QPalette.BrightText, Qt.red)
+        palette.setColor(QPalette.Link, QColor(42, 130, 218))
+        palette.setColor(QPalette.Highlight, QColor(42, 130, 218))
+        palette.setColor(QPalette.HighlightedText, Qt.black)
+        QApplication.setPalette(palette)
+
     def init_flight_tab(self):
         tab = QWidget()
         layout = QVBoxLayout()
 
-        # Indicators
-        self.lbl_pos = QLabel("Position: X=0.00, Y=0.00, Z=0.00")
-        self.lbl_att = QLabel("Attitude: R=0.00, P=0.00, Y=0.00")
-        self.lbl_battery = QLabel("Battery: N/A") # Placeholder
+        # Top Section: Status & Modes
+        top_layout = QHBoxLayout()
         
-        # Joy Indicators (Progress bars for axes)
+        # Status Group
+        status_group = QGroupBox("System Status")
+        status_layout = QVBoxLayout()
+        
+        self.lbl_pos = QLabel("Position: X=0.00, Y=0.00, Z=0.00")
+        self.lbl_pos.setFont(QFont("Arial", 12, QFont.Bold))
+        self.lbl_att = QLabel("Attitude: R=0.00, P=0.00, Y=0.00")
+        self.lbl_att.setFont(QFont("Arial", 12, QFont.Bold))
+        self.lbl_battery = QLabel("Battery: N/A")
+        self.lbl_battery.setStyleSheet("color: orange;")
+
+        status_layout.addWidget(self.lbl_pos)
+        status_layout.addWidget(self.lbl_att)
+        status_layout.addWidget(self.lbl_battery)
+        status_group.setLayout(status_layout)
+        
+        # Mode Control Group
+        mode_group = QGroupBox("Mode Selection")
+        mode_layout = QVBoxLayout()
+        
+        mode_btn_layout = QHBoxLayout()
+        self.btn_test_mode = QPushButton("TEST MODE (Safe)")
+        self.btn_test_mode.setStyleSheet("background-color: #2E7D32; color: white; padding: 10px;")
+        self.btn_test_mode.clicked.connect(lambda: self.node.set_pico_mode(0))
+        
+        self.btn_actual_mode = QPushButton("ACTUAL MODE (Armed)")
+        self.btn_actual_mode.setStyleSheet("background-color: #C62828; color: white; padding: 10px;")
+        self.btn_actual_mode.clicked.connect(lambda: self.node.set_pico_mode(1))
+        
+        mode_btn_layout.addWidget(self.btn_test_mode)
+        mode_btn_layout.addWidget(self.btn_actual_mode)
+        
+        mode_layout.addLayout(mode_btn_layout)
+        mode_layout.addWidget(QLabel("Control Mode:"))
+        
+        ctrl_btn_layout = QHBoxLayout()
+        self.btn_pid = QPushButton("PID Control")
+        self.btn_pid.clicked.connect(lambda: self.node.set_control_mode(0))
+        self.btn_nmpc = QPushButton("NMPC Control")
+        self.btn_nmpc.clicked.connect(lambda: self.node.set_control_mode(1))
+        
+        ctrl_btn_layout.addWidget(self.btn_pid)
+        ctrl_btn_layout.addWidget(self.btn_nmpc)
+        mode_layout.addLayout(ctrl_btn_layout)
+        
+        mode_group.setLayout(mode_layout)
+
+        top_layout.addWidget(status_group)
+        top_layout.addWidget(mode_group)
+        layout.addLayout(top_layout)
+
+        # Joy Indicators
         joy_group = QGroupBox("Joystick Input")
         joy_layout = QGridLayout()
         self.joy_bars = []
@@ -158,14 +235,12 @@ class MainWindow(QMainWindow):
             bar.setRange(-100, 100)
             bar.setValue(0)
             bar.setFormat("%v")
+            bar.setStyleSheet("QProgressBar::chunk { background-color: #42A5F5; }")
             joy_layout.addWidget(lbl, i, 0)
             joy_layout.addWidget(bar, i, 1)
             self.joy_bars.append(bar)
         joy_group.setLayout(joy_layout)
 
-        layout.addWidget(self.lbl_pos)
-        layout.addWidget(self.lbl_att)
-        layout.addWidget(self.lbl_battery)
         layout.addWidget(joy_group)
         layout.addStretch()
         tab.setLayout(layout)
@@ -177,6 +252,7 @@ class MainWindow(QMainWindow):
 
         # Toggle
         self.chk_override = QCheckBox("Enable Manual Override")
+        self.chk_override.setStyleSheet("font-size: 14px; font-weight: bold; color: #FF5252;")
         self.chk_override.toggled.connect(self.toggle_override)
         layout.addWidget(self.chk_override)
 
@@ -189,14 +265,12 @@ class MainWindow(QMainWindow):
         for i in range(6):
             lbl = QLabel(f"Motor {i+1}")
             slider = QSlider(Qt.Horizontal)
-            slider.setRange(0, 1000) # Assume 0-1000 control range? Or 0-1 float?
-            # Let's assume 0-100 for UI, mapped to whatever the protocol needs. 
-            # Actuator commands are Float32. Let's assume 0.0 to 1.0 or similar.
-            # I'll use 0-100 in slider and divide by 100.0
+            slider.setRange(0, 1000)
             slider.valueChanged.connect(lambda val, idx=i: self.update_slider(idx, val))
             
             bar = QProgressBar() # RPM feedback
-            bar.setRange(0, 10000) # Example Max RPM
+            bar.setRange(0, 10000)
+            bar.setStyleSheet("QProgressBar::chunk { background-color: #66BB6A; }")
             
             sliders_layout.addWidget(lbl, i, 0)
             sliders_layout.addWidget(slider, i, 1)
@@ -209,7 +283,7 @@ class MainWindow(QMainWindow):
         for i in range(6):
             lbl = QLabel(f"Servo {i+1}")
             slider = QSlider(Qt.Horizontal)
-            slider.setRange(0, 100) # 0-100% (e.g., angle 0-180 or -90 to 90)
+            slider.setRange(0, 100)
             slider.valueChanged.connect(lambda val, idx=i+6: self.update_slider(idx, val))
             
             sliders_layout.addWidget(lbl, i+6, 0)
@@ -223,17 +297,8 @@ class MainWindow(QMainWindow):
 
     def toggle_override(self, checked):
         self.node.manual_override_active = checked
-        # Reset sliders if unchecked? Or keep last?
-        # Let's keep last.
 
     def update_slider(self, index, value):
-        # Update node internal state
-        # Map 0-100 (or 1000) to float. 
-        # Assuming direct mapping for now.
-        # Let's say motors are 0-1.0 and servos are -1.0 to 1.0? 
-        # Without spec, I'll just pass the raw slider value divided by range to normalize if needed, 
-        # but Float32MultiArray might expect raw PWM.
-        # I'll pass the integer value as float for now.
         self.node.override_values[index] = float(value)
 
     def publish_override_timer(self):
@@ -263,8 +328,6 @@ def main(args=None):
     app = QApplication(sys.argv)
     
     # Worker Signals
-    # Better: Create signals object, pass to Node.
-    
     class Signals(QObject):
         telemetry_signal = pyqtSignal(list)
         odometry_signal = pyqtSignal(float, float, float)

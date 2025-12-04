@@ -17,7 +17,7 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-a
 # Detect OS and set ROS Distro
 . /etc/os-release
 if [ "$UBUNTU_CODENAME" = "noble" ]; then
-    ROS_DISTRO="jazzy"
+    ROS_DISTRO="humble"
 elif [ "$UBUNTU_CODENAME" = "jammy" ]; then
     ROS_DISTRO="humble"
 else

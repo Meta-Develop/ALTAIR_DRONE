@@ -5,7 +5,7 @@
 #include "pico/stdlib.h"
 #include "pico/stdio_usb.h"
 #include "pico/stdio/driver.h"
-#include "pico_uart_transports.h"
+// #include "pico_uart_transports.h"
 
 // Check if generic transport is available in uxr
 // The signatures match uxr_custom_transport_open_t etc.
