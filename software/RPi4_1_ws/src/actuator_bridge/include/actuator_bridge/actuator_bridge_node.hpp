@@ -49,6 +49,7 @@ private:
     std::string dxl_device_port_;
     int dxl_baudrate_;
     float dxl_protocol_version_;
+    bool ignore_servo_errors_;
     
     // ID mapping for servos 1-6
     const std::vector<uint8_t> DXL_IDS = {1, 2, 3, 4, 5, 6}; 

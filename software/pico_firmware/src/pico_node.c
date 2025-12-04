@@ -9,11 +9,7 @@
 #include <rcl/error_handling.h>
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
-#include <std_msgs/msg/float32_multi_array.h>
-#include <sensor_msgs/msg/imu.h>
-#include <rosidl_runtime_c/string_functions.h>
-#include <rmw_microros/rmw_microros.h>
-#include "pico_uart_transports.h" // Standard Pico micro-ROS transport
+#include <std_msgs/msg/int8.h>
 
 // Global State
 motor_state_t g_motor_state;
@@ -22,14 +18,25 @@ SemaphoreHandle_t g_motor_mutex;
 sensor_state_t g_sensor_state;
 SemaphoreHandle_t g_sensor_mutex;
 
+// 0 = Test Mode (No Telemetry), 1 = Actual Mode (Telemetry)
+volatile int g_system_mode = 0; 
+
 // Micro-ROS entities
 rcl_publisher_t imu_pub;
 rcl_publisher_t esc_pub;
 rcl_subscription_t motor_sub;
+rcl_subscription_t mode_sub;
 
 std_msgs__msg__Float32MultiArray motor_msg;
 sensor_msgs__msg__Imu imu_msg;
 std_msgs__msg__Float32MultiArray esc_msg;
+std_msgs__msg__Int8 mode_msg;
+
+void mode_callback(const void * msgin) {
+    const std_msgs__msg__Int8 * msg = (const std_msgs__msg__Int8 *)msgin;
+    g_system_mode = msg->data;
+    // Optional: Blink LED to indicate mode change?
+}
 
 void motor_callback(const void * msgin) {
     const std_msgs__msg__Float32MultiArray * msg = (const std_msgs__msg__Float32MultiArray *)msgin;
@@ -70,7 +77,12 @@ void task_control(void *params) {
         
         // Round-Robin Telemetry
         static int telem_idx = 0;
-        float rpm = telemetry_read_rpm(pio1, 2, telem_idx);
+        float rpm = 0.0f;
+        
+        // Only read telemetry in Actual Mode (1)
+        if (g_system_mode == 1) {
+             rpm = telemetry_read_rpm(pio1, 2, telem_idx);
+        }
         
         // Store
         xSemaphoreTake(g_sensor_mutex, portMAX_DELAY);
@@ -144,9 +156,18 @@ void task_microros(void *params) {
         ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
         "/pico/motor_commands"
     );
+    
+    // Mode Subscription
+    rclc_subscription_init_best_effort(
+        &mode_sub,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int8),
+        "/pico/mode"
+    );
 
-    rclc_executor_init(&executor, &support.context, 1, &allocator);
+    rclc_executor_init(&executor, &support.context, 2, &allocator); // Increased handles to 2
     rclc_executor_add_subscription(&executor, &motor_sub, &motor_msg, &motor_callback, ON_NEW_DATA);
+    rclc_executor_add_subscription(&executor, &mode_sub, &mode_msg, &mode_callback, ON_NEW_DATA);
 
     // Initialize messages
     motor_msg.data.capacity = 6;
@@ -172,15 +193,15 @@ void task_microros(void *params) {
         xSemaphoreGive(g_sensor_mutex);
 
         // Populate IMU msg
-        imu_msg.linear_acceleration.x = imu_data.accel_x; // Note: Scaling omitted for raw
-        imu_msg.linear_acceleration.y = imu_data.accel_y;
-        imu_msg.linear_acceleration.z = imu_data.accel_z;
-        imu_msg.angular_velocity.x = imu_data.gyro_x;
-        imu_msg.angular_velocity.y = imu_data.gyro_y;
-        imu_msg.angular_velocity.z = imu_data.gyro_z;
+        imu_msg.linear_acceleration.x = (double)imu_data.accel_x;
+        imu_msg.linear_acceleration.y = (double)imu_data.accel_y;
+        imu_msg.linear_acceleration.z = (double)imu_data.accel_z;
+        imu_msg.angular_velocity.x = (double)imu_data.gyro_x;
+        imu_msg.angular_velocity.y = (double)imu_data.gyro_y;
+        imu_msg.angular_velocity.z = (double)imu_data.gyro_z;
         
-        rcl_publish(&imu_pub, &imu_msg, NULL);
-        rcl_publish(&esc_pub, &esc_msg, NULL);
+        (void)rcl_publish(&imu_pub, &imu_msg, NULL);
+        (void)rcl_publish(&esc_pub, &esc_msg, NULL);
 
         vTaskDelay(pdMS_TO_TICKS(10));
     }
