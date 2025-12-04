@@ -26,8 +26,9 @@ def generate_launch_description():
             name='actuator_bridge',
             output='screen',
             parameters=[
-                {'dxl_device': '/dev/ttyUSB0'},
-                {'dxl_baudrate': 57600}
+                {'dxl_device': '/dev/ttyUSB1'},
+                {'dxl_baudrate': 4000000},
+                {'ignore_servo_errors': True}
             ]
         ),
 
