@@ -20,7 +20,7 @@ include(FetchContent)
 FetchContent_Declare(
   pico_micro_ros
   GIT_REPOSITORY https://github.com/micro-ROS/micro_ros_raspberrypi_pico_sdk
-  GIT_TAG 6.0.0
+  GIT_TAG humble
 )
 
 # Fetch FreeRTOS Kernel
