@@ -204,8 +204,10 @@ void task_microros(void *params) {
         imu_msg.angular_velocity.y = (double)imu_data.gyro_y;
         imu_msg.angular_velocity.z = (double)imu_data.gyro_z;
         
-        (void)rcl_publish(&imu_pub, &imu_msg, NULL);
-        (void)rcl_publish(&esc_pub, &esc_msg, NULL);
+        rcl_ret_t ret = rcl_publish(&imu_pub, &imu_msg, NULL);
+        (void)ret;
+        ret = rcl_publish(&esc_pub, &esc_msg, NULL);
+        (void)ret;
 
         // Heartbeat Blink (Toggle every cycle approx 10ms -> too fast? Make it every 100 cycles)
         static int heartbeat_count = 0;
