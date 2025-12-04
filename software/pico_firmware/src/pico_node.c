@@ -63,7 +63,11 @@ void task_control(void *params) {
     // pio1 has SM 2,3 free.
     telemetry_init(pio1, 2);
 
+    // Debug: Turn LED ON before I2C Init
+    gpio_put(25, 1);
     bno055_init(i2c0, 0, 1); // I2C0, SDA=GP0, SCL=GP1
+    // Debug: Turn LED OFF after I2C Init (Success)
+    gpio_put(25, 0);
 
     TickType_t xLastWakeTime = xTaskGetTickCount();
     const TickType_t xFrequency = pdMS_TO_TICKS(2); // 500Hz approx
@@ -203,6 +207,15 @@ void task_microros(void *params) {
         (void)rcl_publish(&imu_pub, &imu_msg, NULL);
         (void)rcl_publish(&esc_pub, &esc_msg, NULL);
 
+        // Heartbeat Blink (Toggle every cycle approx 10ms -> too fast? Make it every 100 cycles)
+        static int heartbeat_count = 0;
+        if (++heartbeat_count >= 50) {
+            static bool led_state = false;
+            led_state = !led_state;
+            gpio_put(25, led_state);
+            heartbeat_count = 0;
+        }
+
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
@@ -212,14 +225,15 @@ void pico_node_init(void) {
     g_sensor_mutex = xSemaphoreCreateMutex();
     
     TaskHandle_t control_handle;
-    xTaskCreate(task_control, "Control", 1024, NULL, tskIDLE_PRIORITY + 2, &control_handle);
+    // Priority Swap: MicroROS higher than Control to prevent starvation if I2C hangs
+    xTaskCreate(task_control, "Control", 1024, NULL, tskIDLE_PRIORITY + 1, &control_handle);
     
     // Set Affinity to Core 1 (Mask 2 -> bit 1 set)
     #if configUSE_CORE_AFFINITY
     vTaskCoreAffinitySet(control_handle, (1 << 1));
     #endif
 
-    xTaskCreate(task_microros, "MicroROS", 2048, NULL, tskIDLE_PRIORITY + 1, NULL);
+    xTaskCreate(task_microros, "MicroROS", 2048, NULL, tskIDLE_PRIORITY + 2, NULL);
 }
 
 // --- Hooks & Compatibility ---
