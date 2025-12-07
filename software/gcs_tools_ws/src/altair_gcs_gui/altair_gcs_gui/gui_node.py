@@ -15,6 +15,7 @@ from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Joy
 from nav_msgs.msg import Odometry
 import math
+from .remote_manager import RemoteManager
 
 # --- Main GCS Node ---
 class AltairGCSNode(Node):
@@ -133,6 +134,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("ALTAIR Hexacopter GCS")
         self.resize(1000, 700)
 
+        # Remote Manager
+        self.remote_manager = RemoteManager(self.node.get_logger())
+
         # Apply Dark Theme
         self.apply_dark_theme()
 
@@ -143,6 +147,7 @@ class MainWindow(QMainWindow):
         # Init Tabs
         self.init_flight_tab()
         self.init_maintenance_tab()
+        self.init_system_tab()
 
         # Timer for publishing override (10Hz)
         self.override_timer = QTimer()
@@ -294,6 +299,83 @@ class MainWindow(QMainWindow):
         layout.addLayout(sliders_layout)
         tab.setLayout(layout)
         self.tabs.addTab(tab, "Maintenance")
+
+    def init_system_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout()
+        
+        # 1. Connection Status
+        conn_group = QGroupBox("Connection")
+        conn_layout = QHBoxLayout()
+        self.lbl_conn_status = QLabel("Status: Disconnected")
+        self.lbl_conn_status.setStyleSheet("color: red; font-weight: bold; font-size: 14px;")
+        
+        btn_refresh = QPushButton("Check Connection")
+        btn_refresh.clicked.connect(self.check_connection)
+        
+        conn_layout.addWidget(self.lbl_conn_status)
+        conn_layout.addWidget(btn_refresh)
+        conn_group.setLayout(conn_layout)
+        
+        # 2. Node Management
+        node_group = QGroupBox("Remote Node Manager")
+        node_layout = QGridLayout()
+        
+        # Bridge (Node B)
+        node_layout.addWidget(QLabel("Node B (Bridge):"), 0, 0)
+        btn_start_bridge = QPushButton("Launch Bridge")
+        btn_start_bridge.setStyleSheet("background-color: #4CAF50; color: white;")
+        btn_start_bridge.clicked.connect(self.remote_manager.start_bridge_node)
+        
+        btn_stop_bridge = QPushButton("Kill Bridge")
+        btn_stop_bridge.setStyleSheet("background-color: #F44336; color: white;")
+        btn_stop_bridge.clicked.connect(self.remote_manager.stop_bridge_node)
+        
+        node_layout.addWidget(btn_start_bridge, 0, 1)
+        node_layout.addWidget(btn_stop_bridge, 0, 2)
+        
+        # Controller (Node C)
+        node_layout.addWidget(QLabel("Node C (Controller):"), 1, 0)
+        btn_start_ctrl = QPushButton("Launch Controller")
+        btn_start_ctrl.setStyleSheet("background-color: #4CAF50; color: white;")
+        btn_start_ctrl.clicked.connect(self.remote_manager.start_controller_node)
+        
+        btn_stop_ctrl = QPushButton("Kill Controller")
+        btn_stop_ctrl.setStyleSheet("background-color: #F44336; color: white;")
+        btn_stop_ctrl.clicked.connect(self.remote_manager.stop_controller_node)
+        
+        node_layout.addWidget(btn_start_ctrl, 1, 1)
+        node_layout.addWidget(btn_stop_ctrl, 1, 2)
+        
+        node_group.setLayout(node_layout)
+        
+        # 3. System Actions
+        sys_group = QGroupBox("System Actions")
+        sys_layout = QHBoxLayout()
+        
+        btn_reboot = QPushButton("Reboot Node B")
+        btn_reboot.setStyleSheet("background-color: #FF9800; color: black;")
+        btn_reboot.clicked.connect(self.remote_manager.reboot_rpi)
+        
+        sys_layout.addWidget(btn_reboot)
+        sys_group.setLayout(sys_layout)
+
+        layout.addWidget(conn_group)
+        layout.addWidget(node_group)
+        layout.addWidget(sys_group)
+        layout.addStretch()
+        
+        tab.setLayout(layout)
+        self.tabs.addTab(tab, "System Manager")
+
+    def check_connection(self):
+        is_connected = self.remote_manager.check_connection()
+        if is_connected:
+            self.lbl_conn_status.setText("Status: Connected (Node B)")
+            self.lbl_conn_status.setStyleSheet("color: #66BB6A; font-weight: bold; font-size: 14px;")
+        else:
+            self.lbl_conn_status.setText("Status: Disconnected")
+            self.lbl_conn_status.setStyleSheet("color: #F44336; font-weight: bold; font-size: 14px;")
 
     def toggle_override(self, checked):
         self.node.manual_override_active = checked

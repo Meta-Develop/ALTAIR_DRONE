@@ -47,6 +47,10 @@ AltairController::AltairController()
         "/odometry/filtered", sensor_qos, 
         std::bind(&AltairController::odom_callback, this, std::placeholders::_1));
 
+    sub_control_mode_ = this->create_subscription<std_msgs::msg::Int8>(
+        "/control/mode", reliable_qos,
+        std::bind(&AltairController::control_mode_callback, this, std::placeholders::_1));
+
     // Publishers
     pub_actuators_ = this->create_publisher<std_msgs::msg::Float32MultiArray>(
         "/control/actuator_commands", sensor_qos);
@@ -184,6 +188,25 @@ void AltairController::cmd_vel_callback(const geometry_msgs::msg::Twist::SharedP
     
     std::lock_guard<std::mutex> lock(state_mutex_);
     target_setpoint_ << msg->linear.x, msg->linear.y, msg->linear.z, msg->angular.z;
+}
+
+void AltairController::control_mode_callback(const std_msgs::msg::Int8::SharedPtr msg) {
+    if (msg->data == 0) {
+        mode_ = ControlMode::PID_MIXER;
+        RCLCPP_INFO(this->get_logger(), "Switched to PID Mixer");
+    } else if (msg->data == 1) {
+        mode_ = ControlMode::NMPC;
+        
+        // Start MPC thread if not running
+        if (!mpc_running_) {
+            mpc_running_ = true;
+            mpc_thread_ = std::thread(&AltairController::mpc_thread_func, this);
+        }
+        
+        RCLCPP_INFO(this->get_logger(), "Switched to NMPC");
+    } else {
+        RCLCPP_WARN(this->get_logger(), "Invalid Control Mode: %d", msg->data);
+    }
 }
 
 void AltairController::odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
