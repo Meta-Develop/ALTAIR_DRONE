@@ -31,11 +31,17 @@ def generate_launch_description():
             executable='gui_node',
             name='gcs_gui'
         ),
+        # Node(
+        #     package='rviz2',
+        #     executable='rviz2',
+        #     name='rviz2',
+        #     arguments=['-d', rviz_config_file]
+        # ),
         Node(
-            package='rviz2',
-            executable='rviz2',
-            name='rviz2',
-            arguments=['-d', rviz_config_file]
+            package='system_monitor',
+            executable='watchdog',
+            name='system_monitor',
+            output='screen'
         )
         # Uncomment if robot_state_publisher is desired and urdf is available
         # Node(

@@ -21,7 +21,32 @@ ament_target_dependencies(notch_filter_node
   std_msgs
 )
 
-install(TARGETS notch_filter_node
+add_executable(sensor_processing_node src/sensor_processing_node.cpp)
+target_include_directories(sensor_processing_node PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_compile_features(sensor_processing_node PUBLIC cxx_std_17)
+ament_target_dependencies(sensor_processing_node
+  rclcpp
+  sensor_msgs
+  std_msgs
+)
+
+add_executable(imu_unpacker_node src/imu_unpacker_node.cpp)
+target_include_directories(imu_unpacker_node PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_compile_features(imu_unpacker_node PUBLIC cxx_std_17)
+ament_target_dependencies(imu_unpacker_node
+  rclcpp
+  sensor_msgs
+  std_msgs
+)
+
+install(TARGETS 
+  notch_filter_node
+  sensor_processing_node
+  imu_unpacker_node
   DESTINATION lib/${PROJECT_NAME})
 
 ament_package()

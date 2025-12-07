@@ -15,7 +15,7 @@ def generate_launch_description():
             package='micro_ros_agent',
             executable='micro_ros_agent',
             name='micro_ros_agent',
-            arguments=['serial', '--dev', '/dev/ttyACM0', '-v6'],
+            arguments=['serial', '--dev', '/dev/ttyACM0', '-v4'],
             output='screen'
         ),
 
@@ -32,14 +32,22 @@ def generate_launch_description():
             ]
         ),
 
-        # 3. Sensor Processing
+        # 3. IMU Unpacker (Batch -> Raw)
+        Node(
+            package='sensor_processing',
+            executable='imu_unpacker_node',
+            name='imu_unpacker',
+            output='screen'
+        ),
+
+        # 4. Sensor Processing (Raw -> Filtered)
         Node(
             package='sensor_processing',
             executable='sensor_processing_node',
             name='sensor_processing',
             output='screen',
             parameters=[
-                {'imu_sample_rate': 100.0}
+                {'imu_sample_rate': 1000.0} # Updated to 1kHz
             ]
         ),
 
@@ -50,5 +58,14 @@ def generate_launch_description():
             name='ekf_filter_node',
             output='screen',
             parameters=[ekf_config]
+        ),
+
+        # 5. Robot State Publisher (URDF)
+        Node(
+            package='robot_state_publisher',
+            executable='robot_state_publisher',
+            name='robot_state_publisher',
+            output='screen',
+            arguments=[os.path.join(get_package_share_directory('altair_description'), 'urdf', 'altair.urdf')]
         )
     ])

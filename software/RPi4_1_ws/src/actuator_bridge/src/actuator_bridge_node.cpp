@@ -56,6 +56,9 @@ ActuatorBridgeNode::ActuatorBridgeNode()
         RCLCPP_INFO(this->get_logger(), "Dynamixel initialized successfully on %s at %d baud.", dxl_device_port_.c_str(), dxl_baudrate_);
     }
 
+    // Set Safe State (Zero Servos) on Boot
+    setSafeState();
+
     RCLCPP_INFO(this->get_logger(), "Actuator Bridge Node Started.");
 }
 
