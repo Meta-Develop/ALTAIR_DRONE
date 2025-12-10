@@ -9,7 +9,9 @@ public:
     ImuUnpackerNode()
     : Node("imu_unpacker_node")
     {
-        rclcpp::QoS sensor_qos = rclcpp::SensorDataQoS();
+        rclcpp::QoS sensor_qos(10);
+        sensor_qos.reliability(rclcpp::ReliabilityPolicy::BestEffort);
+        sensor_qos.durability(rclcpp::DurabilityPolicy::Volatile);
         
         // Batch Subscriber
         batch_sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
@@ -36,14 +38,19 @@ private:
         // Time step: 1kHz = 1ms
         double dt = 0.001; 
 
-        // SCALING FACTORS (BNO055 AMG Mode)
-        // Accel: Range +/- 4G. 1 LSB = 1.95 mg.
-        // 1.95 mg = 1.95 * 9.80665 / 1000 = 0.0191229 m/s^2 (using std gravity)
-        const double ACCEL_SCALE = 0.0191229; 
+        // SCALING FACTORS (BNO055/MPU6050 AMG Mode)
+        // Configured in Pico for +/- 16G and +/- 2000 dps
+        
+        // Accel: Range +/- 16G. Sensitivity = 2048 LSB/g
+        // 1 LSB = 1/2048 g = 0.00048828 g
+        // 1 g = 9.80665 m/s^2
+        // Scale = (1/2048) * 9.80665 = 0.0047884
+        const double ACCEL_SCALE = 0.0047884; 
 
-        // Gyro: Range 2000 dps. 1 LSB = 1/16 dps.
-        // 1/16 dps = 0.0625 * (PI / 180) rad/s = 0.00109083 rad/s
-        const double GYRO_SCALE = 0.00109083;
+        // Gyro: Range 2000 dps. Sensitivity = 16.4 LSB/dps
+        // 1 LSB = 1/16.4 dps = 0.0609756 dps
+        // Scale (rad/s) = (1/16.4) * (PI/180) = 0.0010642
+        const double GYRO_SCALE = 0.0010642;
 
         for (size_t i = 0; i < num_samples; ++i) {
             sensor_msgs::msg::Imu imu_msg;

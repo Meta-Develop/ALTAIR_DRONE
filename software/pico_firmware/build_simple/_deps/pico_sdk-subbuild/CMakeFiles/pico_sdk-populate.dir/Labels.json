@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "D:/home/6.kennkyuu/ALTAIR_DRONE/Software/pico_firmware/build_simple/_deps/pico_sdk-subbuild/CMakeFiles/pico_sdk-populate"
+		},
+		{
+			"file" : "D:/home/6.kennkyuu/ALTAIR_DRONE/Software/pico_firmware/build_simple/_deps/pico_sdk-subbuild/CMakeFiles/pico_sdk-populate.rule"
+		},
+		{
+			"file" : "D:/home/6.kennkyuu/ALTAIR_DRONE/Software/pico_firmware/build_simple/_deps/pico_sdk-subbuild/CMakeFiles/pico_sdk-populate-complete.rule"
+		},
+		{
+			"file" : "D:/home/6.kennkyuu/ALTAIR_DRONE/Software/pico_firmware/build_simple/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-build.rule"
+		},
+		{
+			"file" : "D:/home/6.kennkyuu/ALTAIR_DRONE/Software/pico_firmware/build_simple/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-configure.rule"
+		},
+		{
+			"file" : "D:/home/6.kennkyuu/ALTAIR_DRONE/Software/pico_firmware/build_simple/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-download.rule"
+		},
+		{
+			"file" : "D:/home/6.kennkyuu/ALTAIR_DRONE/Software/pico_firmware/build_simple/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-install.rule"
+		},
+		{
+			"file" : "D:/home/6.kennkyuu/ALTAIR_DRONE/Software/pico_firmware/build_simple/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-mkdir.rule"
+		},
+		{
+			"file" : "D:/home/6.kennkyuu/ALTAIR_DRONE/Software/pico_firmware/build_simple/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-patch.rule"
+		},
+		{
+			"file" : "D:/home/6.kennkyuu/ALTAIR_DRONE/Software/pico_firmware/build_simple/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-test.rule"
+		},
+		{
+			"file" : "D:/home/6.kennkyuu/ALTAIR_DRONE/Software/pico_firmware/build_simple/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"pico_sdk-populate"
+		],
+		"name" : "pico_sdk-populate"
+	}
+}

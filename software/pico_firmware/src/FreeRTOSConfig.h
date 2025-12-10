@@ -27,12 +27,12 @@
 
 #define configTICK_CORE                         0
 #define configRUN_MULTIPLE_PRIORITIES           1
-#define configUSE_CORE_AFFINITY                 0
+#define configUSE_CORE_AFFINITY                 1
 
 /* Memory */
 #define configSUPPORT_DYNAMIC_ALLOCATION        1
 #define configSUPPORT_STATIC_ALLOCATION         0
-#define configTOTAL_HEAP_SIZE                   (128 * 1024) 
+#define configTOTAL_HEAP_SIZE                   (32 * 1024) 
 
 /* Synchronization/IPC */
 #define configUSE_MUTEXES                       1
@@ -43,9 +43,9 @@
 #define configUSE_EVENT_GROUPS                  1
 
 /* Hooks */
-#define configUSE_IDLE_HOOK                     0
-#define configUSE_TICK_HOOK                     0
-#define configUSE_MALLOC_FAILED_HOOK            0
+#define configUSE_IDLE_HOOK                     1
+#define configUSE_TICK_HOOK                     1
+#define configUSE_MALLOC_FAILED_HOOK            1
 #define configCHECK_FOR_STACK_OVERFLOW          2
 
 /* Software Timers */

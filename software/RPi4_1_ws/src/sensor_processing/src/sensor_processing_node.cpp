@@ -9,16 +9,20 @@ class SensorProcessingNode : public rclcpp::Node
 public:
     SensorProcessingNode()
     : Node("sensor_processing_node"),
-      imu_sample_rate_(100.0),
-      gyro_x_filter_(NotchFilter(100.0, 30.0, 0.8)),
-      gyro_y_filter_(NotchFilter(100.0, 30.0, 0.8)),
-      gyro_z_filter_(NotchFilter(100.0, 30.0, 0.8))
+      imu_sample_rate_(1000.0), // 1kHz native sample rate
+      gyro_x_filter_(NotchFilter(1000.0, 30.0, 0.8)),
+      gyro_y_filter_(NotchFilter(1000.0, 30.0, 0.8)),
+      gyro_z_filter_(NotchFilter(1000.0, 30.0, 0.8))
     {
-        rclcpp::QoS sensor_qos = rclcpp::SensorDataQoS();
+        // QoS: Must match Micro-ROS (Best Effort, Volatile)
+        rclcpp::QoS sensor_qos(10);
+        sensor_qos.reliability(rclcpp::ReliabilityPolicy::BestEffort);
+        sensor_qos.durability(rclcpp::DurabilityPolicy::Volatile);
+
         rclcpp::QoS pub_qos = rclcpp::SystemDefaultsQoS(); // Reliable for EKF
         
         // Declare and get parameter
-        this->declare_parameter("imu_sample_rate", 100.0);
+        this->declare_parameter("imu_sample_rate", 1000.0);
         imu_sample_rate_ = this->get_parameter("imu_sample_rate").as_double();
 
         // Re-initialize filters with correct sample rate
@@ -45,47 +49,43 @@ private:
     // A simple second-order notch filter implementation
     class NotchFilter {
     public:
-        NotchFilter(double fs = 100.0, double f0 = 30.0, double Q = 0.8) 
+        NotchFilter(double fs = 1000.0, double f0 = 30.0, double Q = 0.8) 
         : b0_(1.0), b1_(0.0), b2_(0.0), a0_(1.0), a1_(0.0), a2_(0.0),
           x1_(0.0), x2_(0.0), y1_(0.0), y2_(0.0) {
             reconfigure(fs, f0, Q);
         }
 
         void reconfigure(double fs, double f0, double Q) {
-            // Avoid division by zero
-            if (fs <= 0 || f0 <= 0 || Q <= 0) return;
-            
-            // Nyquist Safety Check: If f0 is near or above fs/2, the filter is unstable.
-            if (f0 >= (fs / 2.0) * 0.95) {
-                return; // Do not update coefficients if unsafe
-            }
-            
-            double w0 = 2.0 * M_PI * f0 / fs;
-            double alpha = sin(w0) / (2.0 * Q);
+            // Pre-warp frequency for bilinear transform or use standard discrete mapping?
+            // Using standard audio EQ cookbook formula associated with rbj usage
+            double omega = 2.0 * M_PI * f0 / fs;
+            double sn = sin(omega);
+            double cs = cos(omega);
+            double alpha = sn / (2.0 * Q);
 
-            b0_ = 1.0;
-            b1_ = -2.0 * cos(w0);
-            b2_ = 1.0;
-            a0_ = 1.0 + alpha;
-            a1_ = -2.0 * cos(w0);
-            a2_ = 1.0 - alpha;
+            double b0 = 1.0;
+            double b1 = -2.0 * cs;
+            double b2 = 1.0;
+            double a0 = 1.0 + alpha;
+            double a1 = -2.0 * cs;
+            double a2 = 1.0 - alpha;
 
-            // Pre-normalize coefficients
-            b0_ /= a0_;
-            b1_ /= a0_;
-            b2_ /= a0_;
-            a1_ /= a0_;
-            a2_ /= a0_;
+            // Normalize
+            b0_ = b0 / a0;
+            b1_ = b1 / a0;
+            b2_ = b2 / a0;
+            a1_ = a1 / a0;
+            a2_ = a2 / a0;
         }
-
-        double apply(double x0) {
-            double y0 = b0_ * x0 + b1_ * x1_ + b2_ * x2_ - a1_ * y1_ - a2_ * y2_;
+        double apply(double input) {
+            double output = b0_*input + b1_*x1_ + b2_*x2_ - a1_*y1_ - a2_*y2_;
             x2_ = x1_;
-            x1_ = x0;
+            x1_ = input;
             y2_ = y1_;
-            y1_ = y0;
-            return y0;
+            y1_ = output;
+            return output;
         }
+
     private:
         double b0_, b1_, b2_, a0_, a1_, a2_;
         double x1_, x2_, y1_, y2_;
@@ -93,25 +93,14 @@ private:
 
     void imuBatchCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg)
     {
-        // Expected size: 6 channels * 20 samples = 120 floats
-        if (msg->data.size() < 6) return; // Basic check
+        if (msg->data.empty() || msg->data.size() % 6 != 0) return;
 
         int samples = msg->data.size() / 6;
-        rclcpp::Time now = this->now();
-        
-        // Iterate backwards or timestamp carefully
-        // Batch assumes last sample is 'now', previous are 'now - 1ms' etc.
-        // Or simply publish with reception time? 
-        // EKF prefers unique timestamps.
-        // Let's iterate forwarding, but calculating timestamp for each.
-        // Last sample time = now.
-        // First sample time = now - (samples-1)*1ms.
-        
+        rclcpp::Time now = this->get_clock()->now();
         uint64_t now_ns = now.nanoseconds();
-        uint64_t dt_ns = 1000000; // 1ms in ns
-
-        // SCALING FACTORS (BNO055 AMG Mode)
-        const double ACCEL_SCALE = 0.0191229; 
+        uint64_t dt_ns = 1000000;
+        
+        const double ACCEL_SCALE = 0.0103119; 
         const double GYRO_SCALE = 0.00109083;
 
         for (int i = 0; i < samples; i++) {
