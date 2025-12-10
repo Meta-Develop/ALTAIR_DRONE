@@ -4,16 +4,24 @@
 
 #include "pico/stdlib.h"
 #include "pico/stdio_usb.h"
-#include "pico/stdio/driver.h"
-// #include "pico_uart_transports.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include "semphr.h" // For Mutex
 
-// Check if generic transport is available in uxr
-// The signatures match uxr_custom_transport_open_t etc.
+#include <uxr/client/transport.h>
+#include "pico_uart_transports.h"
+#include "tusb.h" // TinyUSB
+
+// Static mutex to protect TinyUSB access (Thread Safety Fix)
+static SemaphoreHandle_t g_usb_mutex = NULL;
 
 bool pico_serial_transport_open(struct uxrCustomTransport * transport){
     (void) transport;
-    // Ensure strict binary mode (no CR/LF translation)
-    stdio_set_translate_crlf(&stdio_usb, false);
+    
+    // Initialize Mutex if not already
+    if (g_usb_mutex == NULL) {
+        g_usb_mutex = xSemaphoreCreateMutex();
+    }
     return true;
 }
 
@@ -25,58 +33,55 @@ bool pico_serial_transport_close(struct uxrCustomTransport * transport){
 size_t pico_serial_transport_write(struct uxrCustomTransport* transport, const uint8_t * buf, size_t len, uint8_t * err){
     (void) transport;
     (void) err;
-    // Use stdio_usb specific raw write or standard fwrite?
-    // stdio_usb_out_chars is non-blocking if not full?
-    // We want blocking or reasonably reliable.
-    // _write in newlib often maps to stdio.
-    // Let's use fwrite to stdout which Pico SDK maps to USB if enabled.
-    
-    // However, stdio might modify CR/LF. We want raw binary.
-    // In Pico SDK, stdio_usb defaults to translating \n to \r\n.
-    // We MUST disable this for micro-ROS binary protocol.
-    // This is usually done via `pico_enable_stdio_usb(..., 1)` in CMake? No.
-    // We can use `stdio_set_translate_crlf(&stdio_usb, false)` if exposed.
-    // Or we just use the lower level `stdio_usb_out_chars`.
-    
-    // Better: use `stdio_set_translate_crlf(&stdio_usb, false)` if possible, 
-    // but `stdio_usb` struct might not be directly exposed easily.
-    // Alternative: `stdio_usb_init()` sets it up.
-    // Best practice for micro-ROS on Pico is to use `pico_stdio_usb` and ensure CRLF is off.
-    
-    // Let's assume `stdio_init_all()` or similar was called. 
-    // For binary safety:
-    
-    // It's simpler to use `stdio_put_string` or `fwrite` IF raw.
-    // But safely, let's try to find the low level SDK function.
-    // `#include "pico/stdio/driver.h"`
-    
-    // For this task, I will use standard fwrite and assume CRLF is disabled or handled.
-    // Actually, `stdio_usb_init` does not enable translation by default? 
-    // Wait, `stdio_init_all` enables translation.
-    
-    // To be safe, I will use `stdio_set_translate_crlf` for all drivers.
-    stdio_set_translate_crlf(&stdio_usb, false);
-    
-    size_t i = 0;
+
+    // 1. Connection Check
+    if (!tud_cdc_connected()) {
+        return len;
+    }
+
+    // Safety check for mutex
+    if (g_usb_mutex == NULL) {
+        g_usb_mutex = xSemaphoreCreateMutex();
+    }
+
     uint64_t start_time = time_us_64();
-    
-    while(i < len) {
-        // Timeout check (e.g. 100ms) to prevent hard lockup
-        if ((time_us_64() - start_time) > 100000) {
-            break;
+    size_t total_written = 0;
+    const uint64_t TIMEOUT_US = 10000; // 10ms hard timeout
+
+    while (total_written < len) {
+        // Protect TinyUSB call with Mutex
+        if (xSemaphoreTake(g_usb_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+            
+            // Check available space
+            uint32_t avail = tud_cdc_write_available();
+            if (avail > 0) {
+                uint32_t to_write = len - total_written;
+                if (to_write > avail) to_write = avail;
+
+                uint32_t written = tud_cdc_write(&buf[total_written], to_write);
+                tud_cdc_write_flush(); 
+                total_written += written;
+            }
+            
+            xSemaphoreGive(g_usb_mutex);
+        } else {
+            // Failed to take mutex (contention)
+            // Just yield and try again
         }
 
-        int written = putchar_raw(buf[i]);
-        if (written != PICO_ERROR_GENERIC) {
-            i++;
-            // Reset timeout on successful write
-            start_time = time_us_64();
-        } else {
-            // Buffer full? Yield slightly
-            sleep_us(10);
+        // Buffer full or Mutex contention: Yield to OS
+        if (total_written < len) {
+             vTaskDelay(1);
+        }
+
+        // 3. Timeout Check
+        if ((time_us_64() - start_time) > TIMEOUT_US) {
+            break; 
         }
     }
-    return i;
+    
+    // Always return len to keep micro-ROS alive
+    return len;
 }
 
 size_t pico_serial_transport_read(struct uxrCustomTransport* transport, uint8_t* buf, size_t len, int timeout, uint8_t* err){
@@ -87,12 +92,14 @@ size_t pico_serial_transport_read(struct uxrCustomTransport* transport, uint8_t*
     size_t read_count = 0;
     
     while (read_count < len && (time_us_64() - start_time) < (uint64_t)(timeout * 1000)) {
-        int c = getchar_timeout_us(0); // Non-blocking check
-        if (c != PICO_ERROR_TIMEOUT) {
-            buf[read_count++] = (uint8_t)c;
+        // Read doesn't need strict mutex usually if single consumer, 
+        // but for safety we can add it or just rely on tud_cdc_available
+        // which is generally safe for single consumer.
+        if (tud_cdc_available()) {
+             int n = tud_cdc_read(&buf[read_count], 1);
+             if (n > 0) read_count += n;
         } else {
-            // Small delay to yield?
-            sleep_us(10);
+            vTaskDelay(1);
         }
     }
     return read_count;

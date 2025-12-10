@@ -61,11 +61,11 @@ def generate_launch_description():
         ),
 
         # 5. Robot State Publisher (URDF)
-        Node(
-            package='robot_state_publisher',
-            executable='robot_state_publisher',
-            name='robot_state_publisher',
-            output='screen',
-            arguments=[os.path.join(get_package_share_directory('altair_description'), 'urdf', 'altair.urdf')]
-        )
+        # Node(
+        #     package='robot_state_publisher',
+        #     executable='robot_state_publisher',
+        #     name='robot_state_publisher',
+        #     output='screen',
+        #     arguments=[os.path.join(get_package_share_directory('altair_description'), 'urdf', 'altair.urdf')]
+        # )
     ])
