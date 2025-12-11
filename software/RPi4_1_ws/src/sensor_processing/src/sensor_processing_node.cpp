@@ -100,8 +100,8 @@ private:
         uint64_t now_ns = now.nanoseconds();
         uint64_t dt_ns = 1000000;
         
-        const double ACCEL_SCALE = 0.0103119; 
-        const double GYRO_SCALE = 0.00109083;
+        const double ACCEL_SCALE = 0.0047884; 
+        const double GYRO_SCALE = 0.0010642;
 
         for (int i = 0; i < samples; i++) {
             // Reconstruct IMU message
@@ -112,7 +112,7 @@ private:
             // sample 19 (newest) -> time: now
             uint64_t sample_time_ns = now_ns - ((samples - 1 - i) * dt_ns);
             imu_msg.header.stamp = rclcpp::Time(sample_time_ns);
-            imu_msg.header.frame_id = "imu_link";
+            imu_msg.header.frame_id = "base_link";
 
             // Unpack Data (Order: ax, ay, az, gx, gy, gz)
             int base_idx = i * 6;

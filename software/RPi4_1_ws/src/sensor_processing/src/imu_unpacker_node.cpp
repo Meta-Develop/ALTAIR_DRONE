@@ -59,7 +59,7 @@ private:
             // Sample i=0 is oldest, i=num_samples-1 is newest (arrived 'now')
             double offset = (double)(num_samples - 1 - i) * dt;
             imu_msg.header.stamp = now - rclcpp::Duration::from_seconds(offset);
-            imu_msg.header.frame_id = "imu_link";
+            imu_msg.header.frame_id = "base_link";
 
             float ax_raw = msg->data[i*6 + 0];
             float ay_raw = msg->data[i*6 + 1];
