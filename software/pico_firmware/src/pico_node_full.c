@@ -99,11 +99,11 @@ int main() {
     // MPU6050 Init (no return value check, will loop if read fails)
     mpu6050_init(I2C_PORT);
     
-    // DShot Init (6 motors via PIO)
-    dshot_init();
+    // DShot Init (6 motors via PIO) - DISABLED FOR DEBUG
+    // dshot_init();
     
-    // Telemetry Init (ESC RPM feedback)
-    telemetry_init(TELEM_PIO, TELEM_SM);
+    // Telemetry Init (ESC RPM feedback) - DISABLED FOR DEBUG
+    // telemetry_init(TELEM_PIO, TELEM_SM);
     
     // Wait for USB enumeration
     sleep_ms(2000);
