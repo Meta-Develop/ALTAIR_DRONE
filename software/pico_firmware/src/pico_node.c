@@ -12,6 +12,8 @@
 #include <rclc/executor.h>
 #include <std_msgs/msg/float32_multi_array.h>
 
+#include "tusb.h"  // For tud_cdc_connected()
+
 #include "drivers/dshot.h"
 #include "drivers/telemetry.h"
 #include "drivers/mpu6050.h"
@@ -127,6 +129,11 @@ void motor_cb(const void * msgin);
 void task_ros(void *params) {
     (void)params;
 
+    // Wait for USB to enumerate (up to 5 seconds)
+    for (int i = 0; i < 50 && !tud_cdc_connected(); i++) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
     // Transport Init
     rmw_uros_set_custom_transport(
         true, NULL,
@@ -138,9 +145,12 @@ void task_ros(void *params) {
     rcl_allocator_t allocator = rcl_get_default_allocator();
     rclc_support_t support;
 
-    // Ping
-    while (rmw_uros_ping_agent(100, 1) != RMW_RET_OK) { vTaskDelay(pdMS_TO_TICKS(100)); }
-    gpio_put(25, 1);
+    // Ping (LED blink while waiting)
+    while (rmw_uros_ping_agent(100, 1) != RMW_RET_OK) { 
+        gpio_xor_mask(1 << 25); // Toggle LED
+        vTaskDelay(pdMS_TO_TICKS(200)); 
+    }
+    gpio_put(25, 1); // Solid ON once connected
 
     rclc_support_init(&support, 0, NULL, &allocator);
     rclc_node_init_default(&node, "pico_node", "", &support);
@@ -203,7 +213,8 @@ void task_ros(void *params) {
                     imu_data[base+5] = (float)batch_buffer[i].imu.gz;
                     // Note: This is RAW INT16 cast to float. Unpacker node must scale.
                 }
-                rcl_publish(&imu_pub, &imu_msg, NULL);
+                rcl_ret_t ret = rcl_publish(&imu_pub, &imu_msg, NULL);
+                (void)ret;
                 batch_idx = 0;
             }
         }
@@ -224,10 +235,22 @@ void motor_cb(const void * msgin) {
     }
 }
 
+// USB Device Task (Required for TinyUSB to work with FreeRTOS)
+void task_usb(void *params) {
+    (void)params;
+    while (1) {
+        tud_task();  // TinyUSB device task
+        vTaskDelay(1);  // 1ms polling
+    }
+}
+
 // Initialization
 void pico_node_init(void) {
     g_sensor_queue = xQueueCreate(10, sizeof(sensor_packet_t)); 
     g_motor_mutex = xSemaphoreCreateMutex();
+    
+    // USB Device Task (MUST run for CDC to work)
+    xTaskCreate(task_usb, "USB", 256, NULL, tskIDLE_PRIORITY + 2, NULL);
     
     // Core 0: Comm
     xTaskCreate(task_ros, "ROS", 4096, NULL, tskIDLE_PRIORITY + 1, NULL);
@@ -235,5 +258,5 @@ void pico_node_init(void) {
     // Core 1: Sensor (Pinned if possible)
     TaskHandle_t hSensor;
     xTaskCreate(task_sensor, "Sensor", 2048, NULL, tskIDLE_PRIORITY + 4, &hSensor);
-    vTaskCoreAffinitySet(hSensor, (1 << 1)); // Core 1
+    // vTaskCoreAffinitySet(hSensor, (1 << 1)); // Core 1 (Disabled for single-core build)
 }
