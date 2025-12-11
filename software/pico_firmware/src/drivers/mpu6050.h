@@ -30,8 +30,8 @@ typedef struct {
 
 // Prototypes
 // Prototypes
-// Prototypes
-void mpu6050_init(i2c_inst_t *i2c);
+// Prototypes// Init
+bool mpu6050_init(i2c_inst_t *i2c);
 bool mpu6050_read_burst(i2c_inst_t *i2c, mpu6050_data_t *data);
 
 #endif

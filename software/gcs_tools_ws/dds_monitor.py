@@ -22,7 +22,10 @@ import threading
 from collections import defaultdict
 
 # Set CycloneDDS Config (same as imu_monitor.py)
-os.environ['CYCLONEDDS_URI'] = 'file:///d:/home/6.kennkyuu/ALTAIR_DRONE/cyclonedds_pc.xml'
+if os.name == 'nt':
+    os.environ['CYCLONEDDS_URI'] = 'file:///d:/home/6.kennkyuu/ALTAIR_DRONE/cyclonedds_pc.xml'
+else:
+    os.environ['CYCLONEDDS_URI'] = 'file:///mnt/d/home/6.kennkyuu/ALTAIR_DRONE/cyclonedds_pc.xml'
 
 import rclpy
 from rclpy.node import Node

@@ -4,20 +4,12 @@
 
 #include "pico/stdlib.h"
 #include "pico/stdio_usb.h"
-// FreeRTOS includes REMOVED
-// #include "FreeRTOS.h"
-// #include "task.h"
-// #include "semphr.h"
-
 #include <uxr/client/transport.h>
 #include "pico_uart_transports.h"
 #include "tusb.h" // TinyUSB
 
-// Mutex removed for Superloop (Single Threaded)
-
 bool pico_serial_transport_open(struct uxrCustomTransport * transport){
     (void) transport;
-    // No mutex needed
     return true;
 }
 
@@ -30,17 +22,24 @@ size_t pico_serial_transport_write(struct uxrCustomTransport* transport, const u
     (void) transport;
     (void) err;
 
-    // 1. Connection Check
-    if (!tud_cdc_connected()) {
-        return len; // Fake success to keep alive
-    }
-
     uint64_t start_time = time_us_64();
-    size_t total_written = 0;
     const uint64_t TIMEOUT_US = 10000; // 10ms hard timeout
 
+    // Wait for CDC connection with timeout
+    while (!tud_cdc_connected()) {
+        tud_task(); // Process USB events
+        if ((time_us_64() - start_time) > TIMEOUT_US) {
+            return 0; // Return 0 to signal failure, not len (which pretends success)
+        }
+        sleep_us(100);
+    }
+
+    size_t total_written = 0;
+    start_time = time_us_64(); // Reset timer for write phase
+
     while (total_written < len) {
-        // Direct write
+        tud_task(); // Keep USB alive during write
+        
         uint32_t av = tud_cdc_write_available();
         if (av > 0) {
             uint32_t to_write = (len - total_written);
@@ -52,18 +51,15 @@ size_t pico_serial_transport_write(struct uxrCustomTransport* transport, const u
                 total_written += written;
             }
         } else {
-             // Buffer full
              sleep_us(100); 
         }
 
-        // 3. Timeout Check
         if ((time_us_64() - start_time) > TIMEOUT_US) {
             break; 
         }
     }
     
-    // Always return len to keep micro-ROS alive
-    return len;
+    return total_written; // Return actual bytes written
 }
 
 size_t pico_serial_transport_read(struct uxrCustomTransport* transport, uint8_t* buf, size_t len, int timeout, uint8_t* err){

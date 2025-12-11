@@ -18,11 +18,7 @@ import math
 from .remote_manager import RemoteManager
 from .attitude_indicator import AttitudeIndicator
 
-# --- Main GCS Node ---
-class AltairGCSNode(Node):
-    # ... (existing code init)
 
-    # ... (existing callbacks)
 
 # --- Main Window ---
 class MainWindow(QMainWindow):
@@ -171,7 +167,7 @@ class AltairGCSNode(Node):
             Joy, '/joy', self.joy_callback, qos_sensor)
             
         self.sub_imu_raw = self.create_subscription(
-            Imu, '/pico/imu_raw', self.imu_raw_callback, qos_sensor)
+            Imu, '/imu/filtered', self.imu_raw_callback, qos_sensor)
 
         # Internal State
         self.manual_override_active = False
