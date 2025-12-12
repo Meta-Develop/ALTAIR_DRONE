@@ -5,6 +5,7 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
+#include <std_msgs/msg/int8.hpp>
 #include <urdf/model.h>
 #include <Eigen/Dense>
 #include <thread>
@@ -32,6 +33,7 @@ private:
     // Callbacks
     void cmd_vel_callback(const geometry_msgs::msg::Twist::SharedPtr msg);
     void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg);
+    void control_mode_callback(const std_msgs::msg::Int8::SharedPtr msg);
     
     // Control Loops
     void control_loop(void); // 250Hz
@@ -44,6 +46,7 @@ private:
     // ROS Interfaces
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_cmd_vel_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_odom_;
+    rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr sub_control_mode_;
     rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr pub_actuators_;
     
     rclcpp::TimerBase::SharedPtr timer_control_;

@@ -17,5 +17,16 @@ __pycache__/
 # ROS 2
 COLCON_IGNORE
 
+# Agent and Project Context
 PROJECT_TASKS.md
 PROJECT_CONSTRAINTS.md
+HANDOVER_CONTEXT.md
+task.md
+.agent/
+
+# Build and Temp Files
+*.uf2
+*.log
+temp.b64
+tmp_clone/
+Software/build_error.log
