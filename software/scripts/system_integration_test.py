@@ -7,6 +7,7 @@ import math
 import time
 
 from rclpy.qos import qos_profile_sensor_data
+import rclpy.qos
 
 class SystemIntegrationTest(Node):
     def __init__(self):
@@ -15,7 +16,6 @@ class SystemIntegrationTest(Node):
         # Publisher
         self.pub_control = self.create_publisher(Float32MultiArray, '/control/actuator_commands', 10)
         
-        # Subscribers
         # QoS Profile for Sensors (Best Effort)
         qos_sensor = rclpy.qos.QoSProfile(
             reliability=rclpy.qos.ReliabilityPolicy.BEST_EFFORT,
@@ -24,7 +24,7 @@ class SystemIntegrationTest(Node):
         )
 
         # Subscribers
-        self.create_subscription(Imu, '/pico/imu_raw', self.imu_callback, qos_sensor)
+        self.create_subscription(Imu, '/imu/filtered', self.imu_callback, qos_sensor)
         self.create_subscription(Float32MultiArray, '/pico/esc_telemetry', self.esc_callback, qos_sensor)
         self.create_subscription(Odometry, '/odometry/filtered', self.odom_callback, 10)
         
@@ -51,8 +51,18 @@ class SystemIntegrationTest(Node):
         
         # Print Status every 1s
         if time.time() - self.last_print >= 1.0:
-            self.get_logger().info(f"Sending Dummy Data... | Rates -> IMU: {self.imu_count} Hz, ESC: {self.esc_count} Hz, Odom: {self.odom_count} Hz")
+            self.get_logger().info(f"--- System Status ---")
+            self.get_logger().info(f"Rates | IMU: {self.imu_count} Hz | ESC: {self.esc_count} Hz | Odom: {self.odom_count} Hz")
             
+            # Check Data Quality if available
+            if hasattr(self, 'last_imu_msg'):
+                az = self.last_imu_msg.linear_acceleration.z
+                self.get_logger().info(f"Last IMU Accel Z: {az:.2f} m/s^2 (Target: ~9.81)")
+            
+            if hasattr(self, 'last_odom_msg'):
+                pos_z = self.last_odom_msg.pose.pose.position.z
+                self.get_logger().info(f"Last Odom Pos Z: {pos_z:.2f} m")
+
             # Reset counters
             self.imu_count = 0
             self.esc_count = 0
@@ -61,12 +71,14 @@ class SystemIntegrationTest(Node):
 
     def imu_callback(self, msg):
         self.imu_count += 1
+        self.last_imu_msg = msg
         
     def esc_callback(self, msg):
         self.esc_count += 1
         
     def odom_callback(self, msg):
         self.odom_count += 1
+        self.last_odom_msg = msg
 
 def main(args=None):
     rclpy.init(args=args)

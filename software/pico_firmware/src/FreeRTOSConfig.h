@@ -3,7 +3,9 @@
 
 #pragma message "Using Custom FreeRTOSConfig.h"
 
+/* Required includes for RP2040 FreeRTOS port */
 #include "pico/stdlib.h"
+#include "hardware/clocks.h"
 
 /* Processor/Board specific */
 #define configCPU_CLOCK_HZ                      133000000
@@ -18,21 +20,22 @@
 #define configUSE_PREEMPTION                    1
 #define configUSE_TIME_SLICING                  1
 #define configUSE_PORT_OPTIMISED_TASK_SELECTION 0
+#define configENABLE_MPU                        0
 
 /* SMP Settings (RP2040 specific) */
 #ifdef configNUM_CORES
     #undef configNUM_CORES
 #endif
-#define configNUM_CORES                         2
+#define configNUM_CORES                         1
 
 #define configTICK_CORE                         0
-#define configRUN_MULTIPLE_PRIORITIES           1
+#define configRUN_MULTIPLE_PRIORITIES           0
 #define configUSE_CORE_AFFINITY                 0
 
 /* Memory */
 #define configSUPPORT_DYNAMIC_ALLOCATION        1
 #define configSUPPORT_STATIC_ALLOCATION         0
-#define configTOTAL_HEAP_SIZE                   (128 * 1024) 
+#define configTOTAL_HEAP_SIZE                   (32 * 1024) 
 
 /* Synchronization/IPC */
 #define configUSE_MUTEXES                       1
@@ -43,9 +46,9 @@
 #define configUSE_EVENT_GROUPS                  1
 
 /* Hooks */
-#define configUSE_IDLE_HOOK                     0
-#define configUSE_TICK_HOOK                     0
-#define configUSE_MALLOC_FAILED_HOOK            0
+#define configUSE_IDLE_HOOK                     1
+#define configUSE_TICK_HOOK                     1
+#define configUSE_MALLOC_FAILED_HOOK            1
 #define configCHECK_FOR_STACK_OVERFLOW          2
 
 /* Software Timers */
@@ -77,5 +80,10 @@
 /* Interrupt Nesting - ARM Cortex-M0+ */
 #define configKERNEL_INTERRUPT_PRIORITY         ( 0xff )
 #define configMAX_SYSCALL_INTERRUPT_PRIORITY    ( 0xff ) // M0+ has no basepri, so this is usually ignored or handled differently by port
+
+/* Interrupt Handler Mappings */
+#define vPortSVCHandler         isr_svcall
+#define xPortPendSVHandler      isr_pendsv
+#define xPortSysTickHandler     isr_systick
 
 #endif /* FREERTOS_CONFIG_H */
