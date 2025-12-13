@@ -17,10 +17,10 @@ class SpiBridgeNode(Node):
         # SPI Setup
         self.spi = spidev.SpiDev()
         try:
-            self.spi.open(0, 0) # Bus 0, Device 0 (CE0)
+            self.spi.open(0, 1) # Bus 0, Device 1 (CE1 / Pin 26)
             self.spi.max_speed_hz = 4000000 # 4MHz to match Pico
             self.spi.mode = 0 # CPOL=0, CPHA=0 (Matches Pico)
-            self.get_logger().info("SPI Initialized: Bus 0, Device 0, 4MHz")
+            self.get_logger().info("SPI Initialized: Bus 0, Device 1 (Pin 26), 4MHz")
         except Exception as e:
             self.get_logger().error(f"Failed to open SPI: {e}")
             # We continue (loop will fail) or exit? Exit is better.
