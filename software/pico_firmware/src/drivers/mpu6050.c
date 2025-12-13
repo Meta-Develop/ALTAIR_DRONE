@@ -1,29 +1,31 @@
 #include "mpu6050.h"
 #include <stdio.h>
 
-static void mpu6050_write_reg(i2c_inst_t *i2c, uint8_t reg, uint8_t val) {
+static bool mpu6050_write_reg(i2c_inst_t *i2c, uint8_t reg, uint8_t val) {
     uint8_t buffer[2];
     buffer[0] = reg;
     buffer[1] = val;
-    i2c_write_blocking(i2c, MPU6050_ADDR, buffer, 2, false);
+    int ret = i2c_write_timeout_us(i2c, MPU6050_ADDR, buffer, 2, false, 10000);
+    return (ret >= 0);
 }
 
-void mpu6050_init(i2c_inst_t *i2c) {
-    // Expected that i2c init and pin config is done in main
+bool mpu6050_init(i2c_inst_t *i2c) {
+    bool success = true;
     
     // Wakeup (Clear SLEEP bit)
-    mpu6050_write_reg(i2c, REG_PWR_MGMT_1, 0x00);
+    if (!mpu6050_write_reg(i2c, REG_PWR_MGMT_1, 0x00)) success = false;
     sleep_ms(50);
     
     // Config (DLPF=3: ~42Hz Bandwidth)
-    // Good for filtering noise, decent delay approx 4.8ms
-    mpu6050_write_reg(i2c, REG_CONFIG, DLPF_42HZ);
+    if (!mpu6050_write_reg(i2c, REG_CONFIG, DLPF_42HZ)) success = false;
     
     // Gyro +/- 2000 dps
-    mpu6050_write_reg(i2c, REG_GYRO_CONFIG, GYRO_RANGE_2000);
+    if (!mpu6050_write_reg(i2c, REG_GYRO_CONFIG, GYRO_RANGE_2000)) success = false;
     
     // Accel +/- 16g
-    mpu6050_write_reg(i2c, REG_ACCEL_CONFIG, ACCEL_RANGE_16G);
+    if (!mpu6050_write_reg(i2c, REG_ACCEL_CONFIG, ACCEL_RANGE_16G)) success = false;
+    
+    return success;
 }
 
 bool mpu6050_read_burst(i2c_inst_t *i2c, mpu6050_data_t *data) {
@@ -31,13 +33,14 @@ bool mpu6050_read_burst(i2c_inst_t *i2c, mpu6050_data_t *data) {
     int ret;
     
     // Write Start Addr
-    ret = i2c_write_blocking(i2c, MPU6050_ADDR, &reg, 1, true); // true = nostop
-    if (ret == PICO_ERROR_GENERIC) return false;
+    // Write Start Addr
+    ret = i2c_write_timeout_us(i2c, MPU6050_ADDR, &reg, 1, true, 10000); // 10ms
+    if (ret < 0) return false;
     
     // Read 14 bytes
     uint8_t buffer[14];
-    ret = i2c_read_blocking(i2c, MPU6050_ADDR, buffer, 14, false);
-    if (ret == PICO_ERROR_GENERIC) return false;
+    ret = i2c_read_timeout_us(i2c, MPU6050_ADDR, buffer, 14, false, 10000); // 10ms
+    if (ret < 0) return false;
     
     // Parse
     data->ax = (buffer[0] << 8) | buffer[1];
