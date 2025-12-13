@@ -9,15 +9,20 @@ class SensorProcessingNode : public rclcpp::Node
 public:
     SensorProcessingNode()
     : Node("sensor_processing_node"),
-      imu_sample_rate_(100.0),
-      gyro_x_filter_(NotchFilter(100.0, 30.0, 0.8)),
-      gyro_y_filter_(NotchFilter(100.0, 30.0, 0.8)),
-      gyro_z_filter_(NotchFilter(100.0, 30.0, 0.8))
+      imu_sample_rate_(1000.0), // 1kHz native sample rate
+      gyro_x_filter_(NotchFilter(1000.0, 30.0, 0.8)),
+      gyro_y_filter_(NotchFilter(1000.0, 30.0, 0.8)),
+      gyro_z_filter_(NotchFilter(1000.0, 30.0, 0.8))
     {
-        rclcpp::QoS sensor_qos = rclcpp::SensorDataQoS();
+        // QoS: Must match Micro-ROS (Best Effort, Volatile)
+        rclcpp::QoS sensor_qos(10);
+        sensor_qos.reliability(rclcpp::ReliabilityPolicy::BestEffort);
+        sensor_qos.durability(rclcpp::DurabilityPolicy::Volatile);
+
+        rclcpp::QoS pub_qos = rclcpp::SystemDefaultsQoS(); // Reliable for EKF
         
         // Declare and get parameter
-        this->declare_parameter("imu_sample_rate", 100.0);
+        this->declare_parameter("imu_sample_rate", 1000.0);
         imu_sample_rate_ = this->get_parameter("imu_sample_rate").as_double();
 
         // Re-initialize filters with correct sample rate
@@ -26,80 +31,112 @@ public:
         gyro_y_filter_.reconfigure(imu_sample_rate_, 30.0, 0.8);
         gyro_z_filter_.reconfigure(imu_sample_rate_, 30.0, 0.8);
 
-        imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
-            "/pico/imu_raw", sensor_qos,
-            std::bind(&SensorProcessingNode::imuCallback, this, std::placeholders::_1));
+        // Subscribe to Batch Data
+        imu_batch_sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
+            "/pico/imu_batch", sensor_qos,
+            std::bind(&SensorProcessingNode::imuBatchCallback, this, std::placeholders::_1));
 
         esc_sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
             "/pico/esc_telemetry", sensor_qos,
             std::bind(&SensorProcessingNode::escCallback, this, std::placeholders::_1));
 
-        imu_pub_ = this->create_publisher<sensor_msgs::msg::Imu>("/imu/filtered", sensor_qos);
+        imu_pub_ = this->create_publisher<sensor_msgs::msg::Imu>("/imu/filtered", pub_qos);
         
-        RCLCPP_INFO(this->get_logger(), "Sensor Processing Node Started. IMU Rate: %.1f Hz", imu_sample_rate_);
+        RCLCPP_INFO(this->get_logger(), "Sensor Processing Node Started. Mode: 1kHz Batch Processing");
     }
 
 private:
     // A simple second-order notch filter implementation
     class NotchFilter {
     public:
-        NotchFilter(double fs = 100.0, double f0 = 30.0, double Q = 0.8) 
+        NotchFilter(double fs = 1000.0, double f0 = 30.0, double Q = 0.8) 
         : b0_(1.0), b1_(0.0), b2_(0.0), a0_(1.0), a1_(0.0), a2_(0.0),
           x1_(0.0), x2_(0.0), y1_(0.0), y2_(0.0) {
             reconfigure(fs, f0, Q);
         }
 
         void reconfigure(double fs, double f0, double Q) {
-            // Avoid division by zero
-            if (fs <= 0 || f0 <= 0 || Q <= 0) return;
-            
-            // Nyquist Safety Check: If f0 is near or above fs/2, the filter is unstable.
-            if (f0 >= (fs / 2.0) * 0.95) {
-                return; // Do not update coefficients if unsafe
-            }
-            
-            double w0 = 2.0 * M_PI * f0 / fs;
-            double alpha = sin(w0) / (2.0 * Q);
+            // Pre-warp frequency for bilinear transform or use standard discrete mapping?
+            // Using standard audio EQ cookbook formula associated with rbj usage
+            double omega = 2.0 * M_PI * f0 / fs;
+            double sn = sin(omega);
+            double cs = cos(omega);
+            double alpha = sn / (2.0 * Q);
 
-            b0_ = 1.0;
-            b1_ = -2.0 * cos(w0);
-            b2_ = 1.0;
-            a0_ = 1.0 + alpha;
-            a1_ = -2.0 * cos(w0);
-            a2_ = 1.0 - alpha;
+            double b0 = 1.0;
+            double b1 = -2.0 * cs;
+            double b2 = 1.0;
+            double a0 = 1.0 + alpha;
+            double a1 = -2.0 * cs;
+            double a2 = 1.0 - alpha;
 
-            // Pre-normalize coefficients
-            b0_ /= a0_;
-            b1_ /= a0_;
-            b2_ /= a0_;
-            a1_ /= a0_;
-            a2_ /= a0_;
+            // Normalize
+            b0_ = b0 / a0;
+            b1_ = b1 / a0;
+            b2_ = b2 / a0;
+            a1_ = a1 / a0;
+            a2_ = a2 / a0;
         }
-
-        double apply(double x0) {
-            double y0 = b0_ * x0 + b1_ * x1_ + b2_ * x2_ - a1_ * y1_ - a2_ * y2_;
+        double apply(double input) {
+            double output = b0_*input + b1_*x1_ + b2_*x2_ - a1_*y1_ - a2_*y2_;
             x2_ = x1_;
-            x1_ = x0;
+            x1_ = input;
             y2_ = y1_;
-            y1_ = y0;
-            return y0;
+            y1_ = output;
+            return output;
         }
+
     private:
         double b0_, b1_, b2_, a0_, a1_, a2_;
         double x1_, x2_, y1_, y2_;
     };
 
-    void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
+    void imuBatchCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg)
     {
-        // Copy message, we'll modify it
-        auto filtered_msg = *msg;
+        if (msg->data.empty() || msg->data.size() % 6 != 0) return;
 
-        // Apply filter to gyro data
-        filtered_msg.angular_velocity.x = gyro_x_filter_.apply(msg->angular_velocity.x);
-        filtered_msg.angular_velocity.y = gyro_y_filter_.apply(msg->angular_velocity.y);
-        filtered_msg.angular_velocity.z = gyro_z_filter_.apply(msg->angular_velocity.z);
+        int samples = msg->data.size() / 6;
+        rclcpp::Time now = this->get_clock()->now();
+        uint64_t now_ns = now.nanoseconds();
+        uint64_t dt_ns = 1000000;
+        
+        const double ACCEL_SCALE = 0.0047884; 
+        const double GYRO_SCALE = 0.0010642;
 
-        imu_pub_->publish(filtered_msg);
+        for (int i = 0; i < samples; i++) {
+            // Reconstruct IMU message
+            sensor_msgs::msg::Imu imu_msg;
+            
+            // Calculate timestamp for this sample
+            // sample 0 (oldest) -> time: now - (samples-1-i)*dt
+            // sample 19 (newest) -> time: now
+            uint64_t sample_time_ns = now_ns - ((samples - 1 - i) * dt_ns);
+            imu_msg.header.stamp = rclcpp::Time(sample_time_ns);
+            imu_msg.header.frame_id = "base_link";
+
+            // Unpack Data (Order: ax, ay, az, gx, gy, gz)
+            int base_idx = i * 6;
+            
+            // Apply Scaling
+            imu_msg.linear_acceleration.x = msg->data[base_idx + 0] * ACCEL_SCALE;
+            imu_msg.linear_acceleration.y = msg->data[base_idx + 1] * ACCEL_SCALE;
+            imu_msg.linear_acceleration.z = msg->data[base_idx + 2] * ACCEL_SCALE;
+            
+            // Gyro (Apply Scaling AND Filter)
+            double gx = msg->data[base_idx + 3] * GYRO_SCALE;
+            double gy = msg->data[base_idx + 4] * GYRO_SCALE;
+            double gz = msg->data[base_idx + 5] * GYRO_SCALE;
+
+            imu_msg.angular_velocity.x = gyro_x_filter_.apply(gx);
+            imu_msg.angular_velocity.y = gyro_y_filter_.apply(gy);
+            imu_msg.angular_velocity.z = gyro_z_filter_.apply(gz);
+            
+            // No Orientation (Raw)
+            imu_msg.orientation_covariance[0] = -1;
+
+            // Publish individualized message
+            imu_pub_->publish(imu_msg);
+        }
     }
 
     void escCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg)
@@ -127,7 +164,7 @@ private:
         }
     }
 
-    rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
+    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr imu_batch_sub_;
     rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr esc_sub_;
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
     

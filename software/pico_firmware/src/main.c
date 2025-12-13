@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include "pico/stdlib.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -6,21 +7,23 @@
 int main() {
     stdio_init_all();
     
-    // Initialize Node Logic (Create Tasks, Mutexes)
-    pico_node_init();
-
-    // Start FreeRTOS Scheduler
-    // In SMP mode, this starts the scheduler on both cores.
-    // Tasks without affinity will be scheduled on available cores.
-    // To bind `task_control` to Core 1 strictly (as requested), we need `vTaskCoreAffinitySet` if supported 
-    // or use `xTaskCreate` then `vTaskCoreAffinitySet`.
-    // However, standard FreeRTOS SMP automatically load balances.
-    // The requirement said "task_control (Core 1)". 
-    // I'll leave it to SMP or assume `pico_node_init` could set affinity if the FreeRTOS config allows.
-    // For this implementation, I'll rely on standard startup.
+    // LED Init
+    const uint LED_PIN = 25;
+    gpio_init(LED_PIN);
+    gpio_set_dir(LED_PIN, GPIO_OUT);
     
-    vTaskStartScheduler();
+    // Signal Boot
+    gpio_put(LED_PIN, 1);
+    sleep_ms(500);
+    gpio_put(LED_PIN, 0);
 
-    while(1);
+    // Init Node
+    pico_node_init();
+    
+    // Start Scheduler
+    vTaskStartScheduler();
+    
+    // Should never reach here
+    while (1);
     return 0;
 }

@@ -2,31 +2,25 @@
 #define PICO_NODE_H
 
 #include <stdint.h>
-#include "FreeRTOS.h"
-#include "semphr.h"
-#include "drivers/bno055.h"
+#include "pico/stdlib.h"
+#include "drivers/mpu6050.h"
 
-// Shared Data
+// Shared Data (Queue uses this type)
 typedef struct {
-    float motors[6];
-    TickType_t last_update_time;
+    uint64_t timestamp_us;
+    mpu6050_data_t imu;
+    float esc_rpm[6]; // Added
+} sensor_packet_t;
+
+// Shared Data (State)
+typedef struct {
+    volatile float motors[6];
+    volatile uint32_t last_update_time_ms;
 } motor_state_t;
 
-typedef struct {
-    bno055_data_t imu;
-    float esc_rpm[6];
-} sensor_state_t;
-
 extern motor_state_t g_motor_state;
-extern SemaphoreHandle_t g_motor_mutex;
 
-extern sensor_state_t g_sensor_state;
-extern SemaphoreHandle_t g_sensor_mutex;
-
+// Main Initialization
 void pico_node_init(void);
-
-// Task Functions
-void task_control(void *params);
-void task_microros(void *params);
 
 #endif
