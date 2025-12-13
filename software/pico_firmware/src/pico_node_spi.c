@@ -34,10 +34,15 @@
 #define PAYLOAD_BYTES (PAYLOAD_FLOATS * sizeof(float))
 
 // --- Globals ---
+volatile uint32_t cs_event_count = 0;
 // Use 2 buffers? Or just one? 
 // Single buffer is fine if main loop updates it atomically-ish.
 float packet_data[PAYLOAD_FLOATS]; // Source
 uint8_t tx_buffer[PAYLOAD_BYTES];  // DMA Source (Byte aligned)
+
+// LED blink state (for visual debugging)
+static int led_timer = 0;
+static bool led_state = false;
 
 int dma_tx;
 dma_channel_config dma_config;
@@ -47,8 +52,9 @@ void cs_irq_handler(uint gpio, uint32_t events) {
     if (gpio == PIN_CS) {
         if (events & GPIO_IRQ_EDGE_FALL) {
             // Transaction Start
-            // Visualization only
-            gpio_xor_mask(1 << 25);
+            // Transaction Start
+            cs_event_count++;
+            // gpio_xor_mask(1 << 25); // Don't toggle directly
         }
         else if (events & GPIO_IRQ_EDGE_RISE) {
             // Transaction End
@@ -155,27 +161,30 @@ int main() {
             packet_data[6] = (float)imu_data.gy;
             packet_data[7] = (float)imu_data.gz;
 
-            // 3. Update DMA Buffer
-            // FIXED PATTERN TEST
-            // Fill with incrementing bytes 0..31 to verify byte order and link
-            for (int i=0; i<PAYLOAD_BYTES; i++) {
-                tx_buffer[i] = (uint8_t)(i + 10); // 10, 11, 12...
-            }
-            // Keep the LED logic to know the loop is running
+            // 3. Update DMA Buffer - Copy float data to byte buffer
+            memcpy(tx_buffer, packet_data, PAYLOAD_BYTES);
             
             // Visual I2C Check:
             // Check if Az is roughly 1G (approx 16384 LSB for 2g range, or just > 1000)
             // If data is valid (non-zero), blink FAST.
             // If data is zero (I2C fail), blink SLOW.
             int16_t az = imu_data.az;
-            static int led_timer = 0;
-            static bool led_state = false;
-            
+            static uint32_t last_cs_count = 0;
+            bool spi_active = (cs_event_count != last_cs_count);
+            last_cs_count = cs_event_count;
+
             bool data_ok = (az > 2000 || az < -2000); 
-            // Threshold 2000 covers 1g (16384) easily, but filters noise vs dead zero.
             
-            int blink_interval = data_ok ? 100 : 1000; // 10Hz vs 1Hz (loop is 1ms)
+            // Blink Logic:
+            // 20Hz (Sleep 25ms) = SPI Active (CS firing)
+            // 2.5Hz (Sleep 200ms) = I2C OK, No SPI
+            // 0.5Hz (Sleep 1000ms) = I2C Fail
             
+            int blink_interval;
+            if (spi_active) blink_interval = 25; // Super Fast
+            else if (data_ok) blink_interval = 200; // Medium
+            else blink_interval = 1000; // Slow
+
             if (++led_timer >= blink_interval) {
                 led_timer = 0;
                 led_state = !led_state;

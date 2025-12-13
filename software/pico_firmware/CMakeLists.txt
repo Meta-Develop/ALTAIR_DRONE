@@ -153,3 +153,23 @@ pico_enable_stdio_uart(pico_raw 0)
 
 pico_add_extra_outputs(pico_raw)
 
+# =========================================
+# SPI Slave Firmware (No Micro-ROS, No FreeRTOS)
+# =========================================
+add_executable(pico_spi
+    src/pico_node_spi.c
+    src/drivers/mpu6050.c
+)
+target_include_directories(pico_spi PRIVATE src src/drivers)
+target_link_libraries(pico_spi 
+    pico_stdlib
+    hardware_i2c
+    hardware_spi
+    hardware_dma
+    hardware_gpio
+)
+# No USB stdio needed for SPI-only firmware
+pico_enable_stdio_usb(pico_spi 0)
+pico_enable_stdio_uart(pico_spi 0)
+
+pico_add_extra_outputs(pico_spi)
