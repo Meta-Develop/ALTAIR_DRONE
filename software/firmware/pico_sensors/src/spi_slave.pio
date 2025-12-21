@@ -15,53 +15,10 @@
 .program spi_slave
 
 .wrap_target
-    ; 1. Wait for CS (GP17) to go Low
-    wait 0 gpio 17
-    
-    ; Signal IRQ for DMA re-arm (Replaces physical loopback)
-    irq 0
-    
-    ; TEST: Hardcode OSR to All Ones (0xFFFFFFFF)
-    ; This ignores TX FIFO and sends 1s.
-    mov osr, ~null      
-    
-    ; ALIGNMENT FIX REMOVED (Not needed for all 1s)
-    ; out null, 24
-
-    ; Shift MSB (Bit 7) to MISO (GP19)
+    ; DIAGNOSTIC: Unconditionally drive MISO High
+    ; This tests if PIO Output Pin Configuration is valid.
+    mov osr, ~null
     out pins, 1
-
-    ; 3. Bit loop for bits 0..6 (7 bits) + last bit handling
-    ; Actually, simpler loop structure:
-    set x, 6        ; Loop 7 times
-
-bitloop:
-    ; Wait for SCK (GP18) Rising Edge (Sample MOSI)
-    wait 1 gpio 18
-    in pins, 1      ; Sample MOSI (GP16) into ISR
-
-    ; Wait for SCK Falling Edge (Shift MISO)
-    wait 0 gpio 18
-    out pins, 1     ; Shift next bit to MISO
-    
-    jmp x-- bitloop ; Repeat
-
-    ; 4. Last Bit (Bit 7 of Input, Bit 0 of Output was shifted in loop? 
-    ; Wait. 
-    ; OUT: Bit 7 (Before Loop), Bits 6..1 (In Loop). 
-    ; Loop runs 7 times.
-    ; Iteration 0: Wait Rise, Sample IN(7), Wait Fall, Out(6).
-    ; ...
-    ; Iteration 6: Wait Rise, Sample IN(1), Wait Fall, Out(0).
-    ; Done.
-    ; We still need to Sample IN(0) on last Rise.
-    
-    wait 1 gpio 18
-    in pins, 1      ; Sample MOSI (Bit 0)
-    wait 0 gpio 18  ; Wait for idle (Fall)
-    
-    ; 5. Push received byte to RX FIFO
-    push block
 .wrap
 
 % c-sdk {
