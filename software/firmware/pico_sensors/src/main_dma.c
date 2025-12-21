@@ -241,18 +241,45 @@ int main() {
 
     while (true) {
         // Toggle LED based on CS state? No, heartbeat is better.
-        // Update ISR count in buffer for visibility
-        // Note: ISR will overwrite Byte 4 on next refill?
-        // Wait, ISR refills 0-7. 
-        // We need ISR to ALSO write debug info.
+        // Update ISR count in buffer for visibility? Done in ISR.
         
-        // ... (standard main loop checks) ...
-        
-        // Heartbeat LED
-        uint32_t now = time_us_32();
-        if (now - last_heartbeat > 500000) {
-            gpio_put(PIN_LED, !gpio_get(PIN_LED));
-            last_heartbeat = now;
+        // Update buffer when new sensor data is available
+        if (new_data_ready) {
+            new_data_ready = false;
+            
+            // Pack data into buffer (DMA will send this)
+            // Note: Byte 0-3 are debug values, Byte 4 is ISR count.
+            // Payload starts at Byte 5?
+            // Original layout: Header (4 bytes) + Floats.
+            // My debug layout: [SR1, SR2, SR3, CC, ISR_CNT, ...floats...]
+            // So floats start at offset 5.
+            
+            float *floats = (float*)(tx_buffer + 8); // Align to 4 bytes? 
+            // Wait, tx_buffer is uint8_t.
+            // If I want floats aligned, I should use offset 8 (multiple of 4).
+            // tx_buffer[0..4] used. 5,6,7 unused? 
+            // Let's use offset 8.
+            
+            floats[0] = (float)sample_count;
+            floats[1] = sensor_data.temp;
+            
+            // Accel (floats 2-4)
+            floats[2] = sensor_data.accel[0];
+            floats[3] = sensor_data.accel[1];
+            floats[4] = sensor_data.accel[2];
+            
+            // Gyro (floats 5-7)
+            floats[5] = sensor_data.gyro[0];
+            floats[6] = sensor_data.gyro[1];
+            floats[7] = sensor_data.gyro[2];
+        }
+
+        // === Continuously keep TX FIFO filled ===
+        // ISR sets tx_idx = 8 (after filling 0-7)
+        // Main loop fills FIFO from current index position
+        while (spi_is_writable(SPI_SLAVE_PORT) && tx_idx < TOTAL_SIZE) {
+            spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[tx_idx];
+            tx_idx++;
         }
 
         // Drain RX FIFO (we don't need master's data)
@@ -271,7 +298,7 @@ int main() {
         // Rate check (every second, print actual rate)
         if (now - last_rate_check > 1000000) {
             uint32_t delta = sample_count - last_sample_count;
-            printf("[MAIN] Sample rate: %lu Hz\n", delta);
+            // printf("[MAIN] Sample rate: %lu Hz\n", delta); // Disable print to avoid USB lag?
             last_sample_count = sample_count;
             last_rate_check = now;
         }
