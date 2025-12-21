@@ -71,7 +71,18 @@ void cs_loopback_callback(uint gpio, uint32_t events) {
         // Disable SPI to flush FIFOs
         spi_get_hw(SPI_SLAVE_PORT)->cr1 &= ~SPI_SSPCR1_SSE_BITS;
         
+        // Debug: Toggle LED to confirm ISR is firing
+        gpio_xor_mask(1u << PIN_LED);
+
         // Pre-fill TX FIFO while SPI is disabled (FIFO is cleared)
+        // WARN: The first byte written seems to be swallowed or lost upon enable
+        // So we write a dummy byte first
+        spi_get_hw(SPI_SLAVE_PORT)->dr = 0x00; // Dummy
+        
+        // Then the actual 7 bytes (FIFO depth is 8, 1 used by dummy)
+        // Wait, if depth is 8, we can write 8 items. 
+        // If first is lost, we write 0, then 0..6?
+        // Let's try writing Dummy + 0..6
         spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[0];
         spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[1];
         spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[2];
@@ -79,13 +90,12 @@ void cs_loopback_callback(uint gpio, uint32_t events) {
         spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[4];
         spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[5];
         spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[6];
-        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[7];
         
         // Now re-enable SPI with fresh data ready
         spi_get_hw(SPI_SLAVE_PORT)->cr1 |= SPI_SSPCR1_SSE_BITS;
         
-        // Set index to 8 - main loop continues from here
-        tx_idx = 8;
+        // Set index to 7 - main loop continues from here
+        tx_idx = 7;
     }
 }
 
