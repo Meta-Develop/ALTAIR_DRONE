@@ -68,27 +68,42 @@ uint offset = 0; // Make global for ISR
 
 // CS Edge Callback - Resync DMA
 // CS (GP17) Falling Edge Handler
+// CS Edge Callback - Resync DMA
+// CS (GP17) Falling Edge Handler
 void cs_irq_handler(uint gpio, uint32_t events) {
-    if (gpio == PIN_CS && (events & GPIO_IRQ_EDGE_FALL)) {
-        // Debug: Toggle LED to prove IRQ fired (CS Detected)
-        gpio_xor_mask(1u << PIN_LED);
-        
-        // Transaction Start (CS Low)
-        
-        // 1. Abort current DMA
-        dma_channel_abort(dma_tx);
-        
-        // 2. Restart PIO State Machine (Sync to fresh Byte Loop)
-        pio_sm_restart(pio, sm);
-        pio_sm_clear_fifos(pio, sm);
-        pio_sm_exec(pio, sm, pio_encode_jmp(offset));
-        
-        // 3. Restart DMA: Reset Count AND Address
-        dma_channel_set_trans_count(dma_tx, TOTAL_SIZE, false);
-        dma_channel_set_read_addr(dma_tx, tx_buffer, true);
-        
-        // Clear Data Ready (Handshake)
-        gpio_put(PIN_DATA_READY, 0); 
+    if (gpio == PIN_CS) {
+        if (events & GPIO_IRQ_EDGE_FALL) {
+            // --- Start of Transaction ---
+            
+            // 1. Disable Fall IRQ, Enable Rise IRQ (Prevent re-triggering)
+            gpio_set_irq_enabled(PIN_CS, GPIO_IRQ_EDGE_FALL, false);
+            gpio_set_irq_enabled(PIN_CS, GPIO_IRQ_EDGE_RISE, true);
+
+            // Debug: Toggle LED
+            gpio_xor_mask(1u << PIN_LED);
+            
+            // 2. Restart Logic
+            dma_channel_abort(dma_tx);
+            pio_sm_restart(pio, sm);
+            pio_sm_clear_fifos(pio, sm);
+            pio_sm_exec(pio, sm, pio_encode_jmp(offset));
+            
+            dma_channel_set_trans_count(dma_tx, TOTAL_SIZE, false);
+            dma_channel_set_read_addr(dma_tx, tx_buffer, true);
+            
+            // Handshake
+            gpio_put(PIN_DATA_READY, 0); 
+        } 
+        else if (events & GPIO_IRQ_EDGE_RISE) {
+            // --- End of Transaction ---
+            
+            // 1. Disable Rise IRQ, Enable Fall IRQ
+            gpio_set_irq_enabled(PIN_CS, GPIO_IRQ_EDGE_RISE, false);
+            gpio_set_irq_enabled(PIN_CS, GPIO_IRQ_EDGE_FALL, true);
+            
+            // Optional: Abort DMA to stop filling FIFO? 
+            // For now, just reset IRQ state.
+        }
     }
 }
 

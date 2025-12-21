@@ -187,7 +187,7 @@ private:
          gpio_cs_->setValue(0);
          
          // Setup Delay: Give Pico time to trigger IRQ and start DMA
-         usleep(50); 
+         usleep(500); 
          
          struct spi_ioc_transfer tr;
          memset(&tr, 0, sizeof(tr));
