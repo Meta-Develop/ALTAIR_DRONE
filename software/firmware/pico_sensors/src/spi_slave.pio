@@ -25,6 +25,11 @@
     ; Pull data from TX FIFO to OSR. 'block' means wait if empty.
     pull block      
     
+    ; ALIGNMENT FIX: DMA writes 8 bits [00 00 00 AA]. 
+    ; Shift Left (MSB First) outputs bits 31..24 first (Zeros).
+    ; We must discard top 24 bits to reach the data at LSB.
+    out null, 24
+
     ; Shift MSB (Bit 7) to MISO (GP19)
     out pins, 1
 
