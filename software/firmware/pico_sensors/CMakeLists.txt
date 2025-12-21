@@ -36,6 +36,9 @@ target_link_libraries(pico_sensors_dma
     hardware_pio
     hardware_timer
 )
+pico_generate_pio_header(pico_sensors_dma ${CMAKE_CURRENT_LIST_DIR}/src/spi_slave.pio)
+target_include_directories(pico_sensors_dma PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
 pico_enable_stdio_usb(pico_sensors_dma 1)
 pico_add_extra_outputs(pico_sensors_dma)
 

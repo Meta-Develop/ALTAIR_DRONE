@@ -6,6 +6,9 @@
 #include "hardware/dma.h"
 #include "hardware/timer.h"
 #include "hardware/irq.h"
+#include "hardware/pio.h"
+#include "hardware/pio_instructions.h"
+#include "spi_slave.pio.h" // PIO Header
 
 // Sensor Driver
 #include "drivers/ism330dhcx.h"
@@ -15,18 +18,17 @@
 // Target: RP2350 (Pico 2) - Pico 2A (Sensors)
 // 
 // Architecture:
-//   - SPI0 Slave: Responds to RPi4 master (GP16-19)
+//   - PIO SPI Slave: Responds to RPi4 master (GP16-19)
 //   - SPI1 Master: Reads ISM330DHCX sensor (GP12-15)
 //   - Timer: 1000Hz interrupt to read sensor
-//   - DMA: Automatically fills SPI TX FIFO from buffer
+//   - DMA: Automatically fills PIO TX FIFO from buffer
 // =============================================================================
 
-// --- SPI0 Slave (Link to RPi4) ---
-#define SPI_SLAVE_PORT spi0
-#define PIN_SLAVE_RX   16  // MOSI from RPi
-#define PIN_SLAVE_CS   17  // CS from RPi
-#define PIN_SLAVE_SCK  18  // SCK from RPi
-#define PIN_SLAVE_TX   19  // MISO to RPi
+// --- PIO SPI Slave (Link to RPi4) ---
+#define PIN_MISO 19
+#define PIN_MOSI 16
+#define PIN_SCK  18
+#define PIN_CS   17
 
 // --- SPI1 Master (Sensor) ---
 #define SPI_SENSOR_PORT spi1
@@ -57,44 +59,30 @@ static volatile ism330_data_t sensor_data;
 static volatile bool new_data_ready = false;
 static volatile uint32_t sample_count = 0;
 
-// DMA channels
-static int dma_tx;
+// DMA
+int dma_tx;
+PIO pio = pio0;
+uint sm = 0;
 
-// TX buffer index - volatile for ISR access
-static volatile uint8_t tx_idx = 0;
-
-// CS loopback IRQ handler - fires on FALLING edge (Transaction Start)
-// CS loopback IRQ handler - fires on FALLING edge (Transaction Start)
+// CS Edge Callback - Resync DMA
 void cs_loopback_callback(uint gpio, uint32_t events) {
     if (gpio == PIN_CS_LOOPBACK && (events & GPIO_IRQ_EDGE_FALL)) {
-        // CS went LOW - transaction starting!
+        // Transaction Start (CS Low)
+        gpio_xor_mask(1u << PIN_LED); // Toggle LED
         
-        // Debug: Toggle LED
-        gpio_xor_mask(1u << PIN_LED);
+        // 1. Abort current DMA (if any) to reset pointer
+        dma_channel_abort(dma_tx);
         
-        // 1. Disable to Flush
-        spi_get_hw(SPI_SLAVE_PORT)->cr1 &= ~SPI_SSPCR1_SSE_BITS;
+        // 2. Clear PIO FIFOs (Optional, ensures fresh start)
+        pio_sm_clear_fifos(pio, sm);
         
-        // 2. Re-Enable immediately (Fresh, empty FIFO)
-        spi_get_hw(SPI_SLAVE_PORT)->cr1 |= SPI_SSPCR1_SSE_BITS;
+        // 3. Restart DMA from start of buffer
+        dma_channel_set_read_addr(dma_tx, tx_buffer, true);
         
-        // 3. Pre-fill TX FIFO
-        // Write 2 Dummy bytes first (sacrificial)
-        while (!spi_is_writable(SPI_SLAVE_PORT)); 
-        spi_get_hw(SPI_SLAVE_PORT)->dr = 0x00;
-        
-        while (!spi_is_writable(SPI_SLAVE_PORT)); 
-        spi_get_hw(SPI_SLAVE_PORT)->dr = 0x00;
-        
-        // Write Header/Data (6 bytes to fill remaining depth of 8)
-        // tx_buffer[0..5]
-        for (int i = 0; i < 6; i++) {
-            while (!spi_is_writable(SPI_SLAVE_PORT)); 
-            spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[i];
-        }
-        
-        // Set index to 6 - main loop continues from here
-        tx_idx = 6;
+        // Restart PIO SM? Not strictly needed if it waits for CS.
+        // But helpful to clear any stuck state.
+        pio_sm_restart(pio, sm);
+        pio_sm_exec(pio, sm, pio_encode_jmp(0)); // Jump to start (wait for CS)
     }
 }
 
@@ -112,11 +100,7 @@ bool timer_1khz_callback(struct repeating_timer *t) {
     return true;  // Keep repeating
 }
 
-// DMA TX completion handler - does nothing, CS loopback ISR handles restart
-void dma_handler() {
-    // Clear interrupt
-    dma_hw->ints0 = 1u << dma_tx;
-}
+
 
 int main() {
     stdio_init_all();
@@ -147,68 +131,48 @@ int main() {
         printf("[MAIN] ISM330DHCX ready!\n");
     }
 
-    // === SPI0 Slave (Link to RPi4) Init ===
-    spi_init(SPI_SLAVE_PORT, 1000000);
-    spi_set_slave(SPI_SLAVE_PORT, true);
-    spi_set_format(SPI_SLAVE_PORT, 8, SPI_CPOL_0, SPI_CPHA_0, SPI_MSB_FIRST);
+    // === PIO SPI Slave Init ===
+    uint offset = pio_add_program(pio, &spi_slave_program);
+    spi_slave_init(pio, sm, offset, PIN_MOSI, PIN_CS, PIN_SCK, PIN_MISO);
     
-    gpio_set_function(PIN_SLAVE_RX, GPIO_FUNC_SPI);
-    gpio_set_function(PIN_SLAVE_SCK, GPIO_FUNC_SPI);
-    gpio_set_function(PIN_SLAVE_TX, GPIO_FUNC_SPI);
-    gpio_set_function(PIN_SLAVE_CS, GPIO_FUNC_SPI);
+    printf("[MAIN] PIO SPI Slave Initialized (MISO=%d, MOSI=%d, SCK=%d, CS=%d)\n", PIN_MISO, PIN_MOSI, PIN_SCK, PIN_CS);
 
     // Init TX Buffer Header
     memcpy(tx_buffer, HEADER, 4);
     memset(tx_buffer + 4, 0, PAYLOAD_SIZE);
 
-    // === DMA Init for SPI Slave TX ===
+    // === DMA Init for PIO TX ===
     dma_tx = dma_claim_unused_channel(true);
     
     dma_channel_config c = dma_channel_get_default_config(dma_tx);
     channel_config_set_transfer_data_size(&c, DMA_SIZE_8);
-    channel_config_set_dreq(&c, spi_get_dreq(SPI_SLAVE_PORT, true));  // TX DREQ
+    channel_config_set_dreq(&c, pio_get_dreq(pio, sm, true)); // Wait for PIO TX FIFO
     channel_config_set_read_increment(&c, true);   // Increment read address (buffer)
-    channel_config_set_write_increment(&c, false); // Fixed write address (SPI DR)
-    channel_config_set_ring(&c, false, 0);         // No ring buffer for read
+    channel_config_set_write_increment(&c, false); // Fixed write address (PIO TXF)
+    channel_config_set_ring(&c, false, 0);         // No ring buffer
     
     // Configure DMA channel
     dma_channel_configure(
         dma_tx,
         &c,
-        &spi_get_hw(SPI_SLAVE_PORT)->dr,  // Write to SPI TX
-        tx_buffer,                         // Read from buffer
-        TOTAL_SIZE,                        // Transfer count
-        false                              // Don't start yet
+        &pio->txf[sm],  // Dest: PIO TX FIFO
+        tx_buffer,      // Src: Buffer
+        TOTAL_SIZE,     // Count
+        false           // Don't start yet
     );
     
-    // Enable DMA interrupt to restart on completion
-    dma_channel_set_irq0_enabled(dma_tx, true);
-    irq_set_exclusive_handler(DMA_IRQ_0, dma_handler);
-    irq_set_enabled(DMA_IRQ_0, true);
+    // Enable DMA interrupt? No, we don't need interrupt if we just abort/restart on CS.
+    // Actually, if buffer exhausts (200 bytes sent), DMA stops.
+    // If master keeps clocking, PIO sends garbage or stalls?
+    // PIO waits for TX FIFO. If empty, it stalls.
+    // If Slave stalls, MISO holds last bit?
+    // That's acceptable for overflow.
     
-    // === CS Loopback GPIO for Edge Detection ===
-    // GP21 (Pin 27) is jumpered to GP17 (Pin 22) - CS signal
-    gpio_init(PIN_CS_LOOPBACK);
-    gpio_set_dir(PIN_CS_LOOPBACK, GPIO_IN);
-    // Initial Pre-fill
-    // TX Buffer: Header + Data
-    tx_buffer[0] = 0xAA;
-    tx_buffer[1] = 0xBB;
-    tx_buffer[2] = 0xCC;
-    tx_buffer[3] = 0xDD;
-    // Data starts at index 4
-    
-    // We don't pre-fill FIFO here because ISR will do it on first Falling Edge
-    // Or we can pre-fill:
-    // With 2 dummies logic, the first transaction might need priming?
-    // Let's just set tx_idx and let ISR handle it.
-    tx_idx = 4;
-
-    // Enable FALLING Edge IRQ for CS detection (Start of Transaction)
+    // Enable CS Loopback IRQ
     gpio_set_irq_enabled_with_callback(PIN_CS_LOOPBACK, GPIO_IRQ_EDGE_FALL, true, &cs_loopback_callback);
     printf("[MAIN] CS Falling Edge IRQ Enabled.\n");
     
-    printf("[MAIN] SPI Slave TX (FIFO Flush on CS Fall) initialized.\n");
+    printf("[MAIN] PIO SPI Slave Ready.\n");
 
     // === Start 1000Hz Timer ===
     struct repeating_timer timer;
@@ -245,17 +209,13 @@ int main() {
         }
 
         // === Continuously keep TX FIFO filled ===
-        // ISR sets tx_idx = 8 (after filling 0-7)
-        // Main loop fills FIFO from current index position
-        while (spi_is_writable(SPI_SLAVE_PORT) && tx_idx < TOTAL_SIZE) {
-            spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[tx_idx];
-            tx_idx++;
-        }
+        // DMA handles this automatically via DREQ from PIO!
+        // No manual filling needed.
 
-        // Drain RX FIFO (we don't need master's data)
-        while (spi_is_readable(SPI_SLAVE_PORT)) {
-            volatile uint8_t dummy = spi_get_hw(SPI_SLAVE_PORT)->dr;
-            (void)dummy;
+        // Drain PIO RX FIFO (we receive MOSI data)
+        // We must read it to prevent PIO stalling on 'push'
+        while (!pio_sm_is_rx_fifo_empty(pio, sm)) {
+            pio_sm_get(pio, sm);
         }
 
         // Heartbeat LED (1Hz blink)
