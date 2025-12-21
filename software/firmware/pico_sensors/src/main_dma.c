@@ -95,8 +95,18 @@ void cs_irq_handler(uint gpio, uint32_t events) {
         pio_sm_restart(pio, sm);
         pio_sm_exec(pio, sm, pio_encode_jmp(offset + spi_slave_offset_entry_point));
         
-        dma_channel_set_trans_count(dma_tx, TOTAL_SIZE, false);
-        dma_channel_set_read_addr(dma_tx, tx_buffer, true);
+        // 3. PRE-FILL TX FIFO with first 4 header bytes BEFORE enabling PIO!
+        // This ensures the first bytes shifted out are AA BB CC DD
+        pio_sm_put_blocking(pio, sm, tx_buffer[0]); // AA
+        pio_sm_put_blocking(pio, sm, tx_buffer[1]); // BB
+        pio_sm_put_blocking(pio, sm, tx_buffer[2]); // CC
+        pio_sm_put_blocking(pio, sm, tx_buffer[3]); // DD
+        
+        // 4. Start DMA for remaining bytes (skip first 4)
+        dma_channel_set_trans_count(dma_tx, TOTAL_SIZE - 4, false);
+        dma_channel_set_read_addr(dma_tx, tx_buffer + 4, true);
+        
+        // 5. NOW enable PIO (FIFO already has 4 bytes ready)
         pio_sm_set_enabled(pio, sm, true);
         
         // Handshake
