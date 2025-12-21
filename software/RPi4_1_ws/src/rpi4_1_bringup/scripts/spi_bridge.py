@@ -111,9 +111,9 @@ class SpiBridgeNode(Node):
         if self.spi_sensors and self.cs_sensors:
             try:
                 self.cs_sensors.select()
-                # 50kHz is slow. 200 bytes * 8 = 1600 bits. 1600/50000 = 0.032s = 32ms.
-                # Timer is 0.001 (1ms). This will block.
-                # But spidev xfer2 blocks.
+                # Give slave time to detect CS edge and pre-fill TX FIFO
+                time.sleep(0.001)  # 1ms setup delay
+                
                 resp_s = self.spi_sensors.xfer2([0] * READ_SIZE)
                 self.cs_sensors.deselect()
                 
