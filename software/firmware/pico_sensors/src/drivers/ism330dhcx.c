@@ -71,18 +71,29 @@ bool ism330_init(spi_inst_t *spi, uint cs_pin) {
 #define REG_OUT_START 0x22
 
 void ism330_read_data(spi_inst_t *spi, uint cs_pin, ism330_data_t *data) {
+    uint8_t buf[14];  // 6 bytes gyro + 6 bytes accel
+    ism330_read_burst(spi, cs_pin, REG_OUT_START, buf, 14);
+    
+    // Gyroscope (offset 0-5): X, Y, Z
+    int16_t gx = (int16_t)(buf[1] << 8 | buf[0]);
+    int16_t gy = (int16_t)(buf[3] << 8 | buf[2]);
+    int16_t gz = (int16_t)(buf[5] << 8 | buf[4]);
+    
     data->gyro[0] = (float)gx * ISM330_SENS_2000DPS;
     data->gyro[1] = (float)gy * ISM330_SENS_2000DPS;
     data->gyro[2] = (float)gz * ISM330_SENS_2000DPS;
     
-    // Accelerometer (offset 8-13): X, Y, Z
-    int16_t ax = (int16_t)(buf[9] << 8 | buf[8]);
-    int16_t ay = (int16_t)(buf[11] << 8 | buf[10]);
-    int16_t az = (int16_t)(buf[13] << 8 | buf[12]);
+    // Accelerometer (offset 6-11): X, Y, Z
+    int16_t ax = (int16_t)(buf[7] << 8 | buf[6]);
+    int16_t ay = (int16_t)(buf[9] << 8 | buf[8]);
+    int16_t az = (int16_t)(buf[11] << 8 | buf[10]);
     
     data->accel[0] = (float)ax * ISM330_SENS_16G;
     data->accel[1] = (float)ay * ISM330_SENS_16G;
     data->accel[2] = (float)az * ISM330_SENS_16G;
+    
+    // Temperature placeholder
+    data->temp = 0.0f;
 }
 
 bool ism330_data_ready(spi_inst_t *spi, uint cs_pin) {
