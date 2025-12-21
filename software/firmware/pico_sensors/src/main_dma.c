@@ -68,14 +68,30 @@ uint offset = 0; // Make global for ISR
 
 // CS Edge Callback - Resync DMA
 // CS (GP17) Falling Edge Handler
-// Alarm callback to re-arm IRQ after transaction
+// Alarm 2: Re-arm IRQ (End of Transaction)
 int64_t rearm_irq_callback(alarm_id_t id, void *user_data) {
-    // Clear any pending interrupts on CS caused by noise/bounce
     gpio_acknowledge_irq(PIN_CS, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE);
-    
-    // Re-enable Falling Edge IRQ
     gpio_set_irq_enabled(PIN_CS, GPIO_IRQ_EDGE_FALL, true);
-    return 0; // Don't repeat
+    return 0;
+}
+
+// Alarm 1: Enable PIO (Delayed Start to ignore SCK noise)
+int64_t pio_enable_callback(alarm_id_t id, void *user_data) {
+    // 2. Restart Logic (Safe from initial noise)
+    dma_channel_abort(dma_tx);
+    pio_sm_restart(pio, sm);
+    pio_sm_clear_fifos(pio, sm);
+    pio_sm_exec(pio, sm, pio_encode_jmp(offset));
+    
+    dma_channel_set_trans_count(dma_tx, TOTAL_SIZE, false);
+    dma_channel_set_read_addr(dma_tx, tx_buffer, true);
+    
+    // Handshake
+    gpio_put(PIN_DATA_READY, 0); 
+    
+    // 3. Schedule Re-arm in 3ms
+    add_alarm_in_ms(3, rearm_irq_callback, NULL, false);
+    return 0;
 }
 
 // CS Edge Callback - Resync DMA
@@ -84,26 +100,14 @@ void cs_irq_handler(uint gpio, uint32_t events) {
     if (gpio == PIN_CS && (events & GPIO_IRQ_EDGE_FALL)) {
         // --- Start of Transaction ---
         
-        // 1. Disable IRQ IMMEDIATELY to prevent crosstalk resets
+        // 1. Disable IRQ IMMEDIATELY
         gpio_set_irq_enabled(PIN_CS, GPIO_IRQ_EDGE_FALL, false);
         
         // Debug: Toggle LED
         gpio_xor_mask(1u << PIN_LED);
         
-        // 2. Restart Logic
-        dma_channel_abort(dma_tx);
-        pio_sm_restart(pio, sm);
-        pio_sm_clear_fifos(pio, sm);
-        pio_sm_exec(pio, sm, pio_encode_jmp(offset));
-        
-        dma_channel_set_trans_count(dma_tx, TOTAL_SIZE, false);
-        dma_channel_set_read_addr(dma_tx, tx_buffer, true);
-        
-        // Handshake
-        gpio_put(PIN_DATA_READY, 0); 
-        
-        // 3. Schedule Re-arm in 3ms (Transfer takes ~1ms @ 1MHz)
-        add_alarm_in_ms(3, rearm_irq_callback, NULL, false);
+        // Schedule Delayed PIO Start (50us) to skip SCK crosstalk
+        add_alarm_in_us(50, pio_enable_callback, NULL, false);
     }
 }
 
