@@ -218,27 +218,32 @@ int main() {
     printf("[MAIN] PIO SPI Slave Ready (DMA Ring Mode).\n");
     printf("[MAIN] TX Buffer Address: %p (Aligned check: %s)\n", (void*)tx_buffer, ((uintptr_t)tx_buffer % 32 == 0) ? "OK" : "FAIL");
 
-    // --- STATIC TEST PATTERN: Fill entire buffer at startup ---
-    // Header: AA BB CC DD
-    tx_buffer[0] = 0xAA; 
-    tx_buffer[1] = 0xBB; 
-    tx_buffer[2] = 0xCC; 
-    tx_buffer[3] = 0xDD;
-    // Payload: Sequential bytes 01 02 03 04... (easy to verify)
-    for (int i = 4; i < TOTAL_SIZE; i++) {
-        tx_buffer[i] = (uint8_t)(i - 3);  // 01, 02, 03...
-    }
-    printf("[MAIN] TX Buffer filled with static test pattern (AA BB CC DD + 01 02 03...)\\n");
+    // --- ALWAYS ON HIGH TEST ---
+    // Goal: Force MISO HIGH to verify pin connectivity and PIO drive.
     
-    // --- GPIO IRQ Setup on CS (GP17) ---
-    gpio_set_irq_enabled_with_callback(PIN_CS, GPIO_IRQ_EDGE_FALL, true, &cs_irq_handler);
-    printf("[MAIN] CS Falling Edge IRQ Enabled on GP17.\n");
+    // 1. Fill Buffer with 0xFF (All 1s) -> LSB is 1 -> MISO should be HIGH
+    memset(tx_buffer, 0xFF, TOTAL_SIZE);
     
-    // Start DMA immediately to fill FIFO
-    // Start DMA immediately (Already started by configure, but harmless)
-    // dma_channel_start(dma_tx);
+    // 2. Pre-fill FIFO with 0xFF
+    pio_sm_clear_fifos(pio, sm);
+    pio_sm_put(pio, sm, 0xFF);
+    pio_sm_put(pio, sm, 0xFF);
+    pio_sm_put(pio, sm, 0xFF);
+    pio_sm_put(pio, sm, 0xFF);
     
-    // printf("[MAIN] PIO SPI Slave Ready (GPIO IRQ Mode).\n");
+    // 3. Enable PIO IMMEDIATELY (No CS IRQ needed)
+    pio_sm_set_enabled(pio, sm, true);
+    printf("[MAIN] PIO Enabled. FIFO pre-filled with 0xFF. MISO should be HIGH.\n");
+    
+    // 4. Disable CS IRQ setup (commented out)
+    // gpio_set_irq_enabled_with_callback(PIN_CS, GPIO_IRQ_EDGE_FALL, true, &cs_irq_handler);
+    
+    // 5. Start DMA (Circular/Infinite transfer emulation if needed, but FIFO pre-fill is enough for static test)
+    dma_channel_set_trans_count(dma_tx, TOTAL_SIZE, false);
+    dma_channel_set_read_addr(dma_tx, tx_buffer, true);
+    dma_channel_start(dma_tx);
+    
+    printf("[MAIN] DMA Started. Entering Loop.\n");
 
     // === Start 1000Hz Timer ===
     struct repeating_timer timer;
