@@ -237,23 +237,22 @@ int main() {
             new_data_ready = false;
             
             // Pack data into buffer (DMA will send this)
-            // Header is at 0-3. Floats start at 4.
-            float *floats = (float*)(tx_buffer + 4); 
+            // === TEST MODE: Simple Incrementing Counter ===
+            // Fill buffer with: AA BB CC DD + incrementing bytes
+            // This makes it easy to verify if data is correct
+            static uint8_t counter = 0;
             
-            // Float 0: Counter (for integrity check)
-            floats[0] = (float)sample_count;
-            // Float 1: Temp (Placeholder)
-            floats[1] = sensor_data.temp;
+            // Header stays: AA BB CC DD
+            tx_buffer[0] = 0xAA;
+            tx_buffer[1] = 0xBB;
+            tx_buffer[2] = 0xCC;
+            tx_buffer[3] = 0xDD;
             
-            // Accel (floats 2-4)
-            floats[2] = sensor_data.accel[0];
-            floats[3] = sensor_data.accel[1];
-            floats[4] = sensor_data.accel[2];
-            
-            // Gyro (floats 5-7)
-            floats[5] = sensor_data.gyro[0];
-            floats[6] = sensor_data.gyro[1];
-            floats[7] = sensor_data.gyro[2];
+            // Fill rest with incrementing counter value (same byte repeated)
+            for (int i = 4; i < TOTAL_SIZE; i++) {
+                tx_buffer[i] = counter;
+            }
+            counter++;  // Increment for next frame
             
             // Signal RPi4 that data is ready (Rising Edge)
             gpio_put(PIN_DATA_READY, 1);
