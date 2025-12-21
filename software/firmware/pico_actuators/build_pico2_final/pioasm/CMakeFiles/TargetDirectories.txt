@@ -1,0 +1,7 @@
+D:/home/6.kennkyuu/ALTAIR_DRONE/Software/firmware/pico_actuators/build_pico2_final/pioasm/CMakeFiles/pioasm.dir
+D:/home/6.kennkyuu/ALTAIR_DRONE/Software/firmware/pico_actuators/build_pico2_final/pioasm/CMakeFiles/edit_cache.dir
+D:/home/6.kennkyuu/ALTAIR_DRONE/Software/firmware/pico_actuators/build_pico2_final/pioasm/CMakeFiles/rebuild_cache.dir
+D:/home/6.kennkyuu/ALTAIR_DRONE/Software/firmware/pico_actuators/build_pico2_final/pioasm/CMakeFiles/list_install_components.dir
+D:/home/6.kennkyuu/ALTAIR_DRONE/Software/firmware/pico_actuators/build_pico2_final/pioasm/CMakeFiles/install.dir
+D:/home/6.kennkyuu/ALTAIR_DRONE/Software/firmware/pico_actuators/build_pico2_final/pioasm/CMakeFiles/install/local.dir
+D:/home/6.kennkyuu/ALTAIR_DRONE/Software/firmware/pico_actuators/build_pico2_final/pioasm/CMakeFiles/install/strip.dir

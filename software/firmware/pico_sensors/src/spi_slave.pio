@@ -1,0 +1,51 @@
+.program spi_cpha0_cs_active_low
+
+; SPI Slave Mode 0 (CPOL=0, CPHA=0)
+; CS is Active Low.
+; Data is sampled on Rising Edge of SCK.
+; Data is shifted out on Falling Edge of SCK.
+;
+; Pin assignments (configured in C):
+; - SCK: input
+; - MOSI: input
+; - CS: input (jmp pin)
+; - MISO: output
+
+.wrap_target
+    ; Wait for CS to go Low (Start of Transfer)
+    wait 0 gpio 17
+
+start_byte:
+    ; We are in a transaction.
+    ; MISO should be driven. (handled by pindirs in C, or side-set?)
+    
+    ; Setup bit counter (8 bits)
+    set x, 7
+
+bitloop:
+    ; 1. Wait for SCK Rise (Master reads MISO, We read MOSI)
+    wait 1 gpio 18
+    in pins, 1          ; Sample MOSI
+
+    ; 2. Wait for SCK Fall (We shift next bit to MISO)
+    wait 0 gpio 18
+    out pins, 1         ; Shift MISO
+
+    ; Check CS: If CS goes High, abort immediately
+    jmp pin end_of_frame
+
+    ; Loop for 8 bits
+    jmp x-- bitloop
+
+    ; End of Byte: Push RX data to FIFO, Pull TX data from FIFO
+    push noblock        ; Push Input Shift Register (RX) to FIFO
+    pull noblock        ; Pull Output Shift Register (TX) from FIFO (if empty, uses X?)
+    mov osr, OSR        ; Ensure OSR is valid
+    
+    jmp start_byte      ; Next byte
+
+end_of_frame:
+    ; CS went High. Reset state.
+    mov osr, null       ; Clear OSR?
+    out null, 32        ; Discard
+.wrap

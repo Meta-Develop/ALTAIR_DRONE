@@ -1,0 +1,3 @@
+D:/home/6.kennkyuu/ALTAIR_DRONE/software/firmware/pico_actuators/build_pico2/_deps/pico_sdk-subbuild/CMakeFiles/pico_sdk-populate.dir
+D:/home/6.kennkyuu/ALTAIR_DRONE/software/firmware/pico_actuators/build_pico2/_deps/pico_sdk-subbuild/CMakeFiles/edit_cache.dir
+D:/home/6.kennkyuu/ALTAIR_DRONE/software/firmware/pico_actuators/build_pico2/_deps/pico_sdk-subbuild/CMakeFiles/rebuild_cache.dir

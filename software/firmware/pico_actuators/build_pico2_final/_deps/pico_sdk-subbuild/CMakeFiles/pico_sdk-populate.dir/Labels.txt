@@ -1,0 +1,14 @@
+# Target labels
+ pico_sdk-populate
+# Source files and their labels
+D:/home/6.kennkyuu/ALTAIR_DRONE/software/firmware/pico_actuators/build_pico2_final/_deps/pico_sdk-subbuild/CMakeFiles/pico_sdk-populate
+D:/home/6.kennkyuu/ALTAIR_DRONE/software/firmware/pico_actuators/build_pico2_final/_deps/pico_sdk-subbuild/CMakeFiles/pico_sdk-populate.rule
+D:/home/6.kennkyuu/ALTAIR_DRONE/software/firmware/pico_actuators/build_pico2_final/_deps/pico_sdk-subbuild/CMakeFiles/pico_sdk-populate-complete.rule
+D:/home/6.kennkyuu/ALTAIR_DRONE/Software/firmware/pico_actuators/build_pico2_final/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-build.rule
+D:/home/6.kennkyuu/ALTAIR_DRONE/Software/firmware/pico_actuators/build_pico2_final/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-configure.rule
+D:/home/6.kennkyuu/ALTAIR_DRONE/Software/firmware/pico_actuators/build_pico2_final/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-download.rule
+D:/home/6.kennkyuu/ALTAIR_DRONE/Software/firmware/pico_actuators/build_pico2_final/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-install.rule
+D:/home/6.kennkyuu/ALTAIR_DRONE/Software/firmware/pico_actuators/build_pico2_final/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-mkdir.rule
+D:/home/6.kennkyuu/ALTAIR_DRONE/Software/firmware/pico_actuators/build_pico2_final/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-patch.rule
+D:/home/6.kennkyuu/ALTAIR_DRONE/Software/firmware/pico_actuators/build_pico2_final/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-test.rule
+D:/home/6.kennkyuu/ALTAIR_DRONE/Software/firmware/pico_actuators/build_pico2_final/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-update.rule

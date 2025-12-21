@@ -73,10 +73,16 @@ class MainWindow(QMainWindow):
         self.lbl_imu_raw.setStyleSheet("color: #42A5F5;")
         self.lbl_battery = QLabel("Battery: N/A")
         self.lbl_battery.setStyleSheet("color: orange;")
+        
+        # Extra Sensors
+        self.lbl_extra = QLabel("Mag: 0,0,0 | Baro: 0Pa | Rng: 0m")
+        self.lbl_extra.setFont(QFont("Consolas", 10))
+
 
         status_layout.addWidget(self.lbl_pos)
         status_layout.addWidget(self.lbl_att)
         status_layout.addWidget(self.lbl_imu_raw)
+        status_layout.addWidget(self.lbl_extra)
         status_layout.addWidget(self.lbl_battery)
         status_group.setLayout(status_layout)
         
@@ -169,10 +175,23 @@ class AltairGCSNode(Node):
         self.sub_imu_raw = self.create_subscription(
             Imu, '/imu/filtered', self.imu_raw_callback, qos_sensor)
 
+        # Added Sensors
+        self.sub_mag = self.create_subscription(
+            Float32MultiArray, '/pico/mag', self.mag_callback, qos_sensor)
+        self.sub_baro = self.create_subscription(
+            Float32MultiArray, '/pico/baro', self.baro_callback, qos_sensor)
+        self.sub_range = self.create_subscription(
+            Float32MultiArray, '/pico/range', self.range_callback, qos_sensor)
+
         # Internal State
         self.manual_override_active = False
         self.override_values = [0.0] * 12 # 6 Motors, 6 Servos
         self.imu_packet_count = 0
+        
+        # Sensor Buffers
+        self.mag_data = [0.0, 0.0, 0.0]
+        self.baro_data = [0.0, 0.0]  # Pressure, Temp
+        self.range_val = 0.0
 
         self.get_logger().info("ALTAIR GCS Node Started")
 
@@ -238,6 +257,21 @@ class AltairGCSNode(Node):
         
         self.imu_packet_count += 1
         self.worker_signals.imu_signal.emit(ax, ay, az, gx, gy, gz)
+
+    def mag_callback(self, msg):
+        if len(msg.data) >= 3:
+            self.mag_data = list(msg.data)
+            self.worker_signals.sensor_signal.emit(self.mag_data, self.baro_data, self.range_val)
+
+    def baro_callback(self, msg):
+        if len(msg.data) >= 1: # At least pressure
+            self.baro_data = list(msg.data)
+            self.worker_signals.sensor_signal.emit(self.mag_data, self.baro_data, self.range_val)
+
+    def range_callback(self, msg):
+        if len(msg.data) >= 1:
+            self.range_val = msg.data[0]
+            self.worker_signals.sensor_signal.emit(self.mag_data, self.baro_data, self.range_val)
 
     def publish_override(self):
         if self.manual_override_active:
@@ -597,6 +631,11 @@ class MainWindow(QMainWindow):
         if self.txt_log.document().blockCount() > 500:
              self.txt_log.clear()
 
+    def update_sensors(self, mag, baro, rng):
+        # mag list, baro list, rng float
+        if not baro: baro = [0.0]
+        self.lbl_extra.setText(f"Mag: {mag[0]:.1f},{mag[1]:.1f},{mag[2]:.1f} | Baro: {baro[0]:.0f} | Rng: {rng:.2f}m")
+
 def main(args=None):
     rclpy.init(args=args)
     
@@ -607,8 +646,10 @@ def main(args=None):
         telemetry_signal = pyqtSignal(list)
         odometry_signal = pyqtSignal(float, float, float)
         attitude_signal = pyqtSignal(float, float, float)
+        attitude_signal = pyqtSignal(float, float, float)
         imu_signal = pyqtSignal(float, float, float, float, float, float)
         joy_signal = pyqtSignal(list, list)
+        sensor_signal = pyqtSignal(list, list, float) # Mag, Baro, Range
     
     signals = Signals()
     
@@ -620,7 +661,9 @@ def main(args=None):
     signals.odometry_signal.connect(window.update_odometry)
     signals.attitude_signal.connect(window.update_attitude)
     signals.imu_signal.connect(window.update_imu)
+    signals.imu_signal.connect(window.update_imu)
     signals.joy_signal.connect(window.update_joy)
+    signals.sensor_signal.connect(window.update_sensors)
     
     # Thread for ROS spin
     thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)

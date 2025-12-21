@@ -1,0 +1,21 @@
+# ninja log v7
+6	263	7876614150440495	pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-mkdir	1a19070643ee65cc
+6	263	7876614150440495	D:/home/6.kennkyuu/ALTAIR_DRONE/software/firmware/pico_actuators/build_pico2_clean/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-mkdir	1a19070643ee65cc
+265	890965	7876623057563420	pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-download	f0032a05ab99bd14
+265	890965	7876623057563420	D:/home/6.kennkyuu/ALTAIR_DRONE/software/firmware/pico_actuators/build_pico2_clean/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-download	f0032a05ab99bd14
+890965	902711	7876623057693331	pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-update	f2883ad3e9050f25
+890965	902711	7876623057693331	D:/home/6.kennkyuu/ALTAIR_DRONE/software/firmware/pico_actuators/build_pico2_clean/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-update	f2883ad3e9050f25
+902712	902890	7876623176817470	pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-patch	d0139976ca994b7
+902712	902890	7876623176817470	D:/home/6.kennkyuu/ALTAIR_DRONE/software/firmware/pico_actuators/build_pico2_clean/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-patch	d0139976ca994b7
+902890	903023	7876623178141882	pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-configure	984094cd35409b0f
+902890	903023	7876623178141882	D:/home/6.kennkyuu/ALTAIR_DRONE/software/firmware/pico_actuators/build_pico2_clean/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-configure	984094cd35409b0f
+903023	903191	7876623179760417	pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-build	a79e56d5340b6c4d
+903023	903191	7876623179760417	D:/home/6.kennkyuu/ALTAIR_DRONE/software/firmware/pico_actuators/build_pico2_clean/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-build	a79e56d5340b6c4d
+903191	903430	7876623182114426	pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-install	38d84e33ede444ae
+903191	903430	7876623182114426	D:/home/6.kennkyuu/ALTAIR_DRONE/software/firmware/pico_actuators/build_pico2_clean/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-install	38d84e33ede444ae
+903431	903636	7876623184181745	pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-test	6d21f5da5159abc5
+903431	903636	7876623184181745	D:/home/6.kennkyuu/ALTAIR_DRONE/software/firmware/pico_actuators/build_pico2_clean/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-test	6d21f5da5159abc5
+903637	903869	7876623186581226	CMakeFiles/pico_sdk-populate-complete	ee94be7ddd0c10a2
+903637	903869	7876623186581226	pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-done	ee94be7ddd0c10a2
+903637	903869	7876623186581226	D:/home/6.kennkyuu/ALTAIR_DRONE/software/firmware/pico_actuators/build_pico2_clean/_deps/pico_sdk-subbuild/CMakeFiles/pico_sdk-populate-complete	ee94be7ddd0c10a2
+903637	903869	7876623186581226	D:/home/6.kennkyuu/ALTAIR_DRONE/software/firmware/pico_actuators/build_pico2_clean/_deps/pico_sdk-subbuild/pico_sdk-populate-prefix/src/pico_sdk-populate-stamp/pico_sdk-populate-done	ee94be7ddd0c10a2

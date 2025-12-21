@@ -1,0 +1,5 @@
+D:/home/6.kennkyuu/ALTAIR_DRONE/Software/firmware/pico_actuators/build_pico2_clean/pioasm-install/pioasm/pioasm.exe
+D:/home/6.kennkyuu/ALTAIR_DRONE/Software/firmware/pico_actuators/build_pico2_clean/pioasm-install/pioasm/pioasmTargets.cmake
+D:/home/6.kennkyuu/ALTAIR_DRONE/Software/firmware/pico_actuators/build_pico2_clean/pioasm-install/pioasm/pioasmTargets-release.cmake
+D:/home/6.kennkyuu/ALTAIR_DRONE/Software/firmware/pico_actuators/build_pico2_clean/pioasm-install/pioasm/pioasmConfig.cmake
+D:/home/6.kennkyuu/ALTAIR_DRONE/Software/firmware/pico_actuators/build_pico2_clean/pioasm-install/pioasm/pioasmConfigVersion.cmake

@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"D:/home/6.kennkyuu/ALTAIR_DRONE/software/firmware/pico_actuators/build_pico2_final/_deps/pico_sdk-subbuild/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
