@@ -158,27 +158,10 @@ private:
         }
 
         while (running_ && rclcpp::ok()) {
-            // Block waiting for GPIO Rise
-            int ret = poll(&pfd, 1, 100); // 100ms timeout for faster fallback
-            
-            // If edge triggered, clear and read
-            if (ret > 0 && (pfd.revents & POLLPRI)) {
-                gpio_ready_->clear_interrupt();
-                performRead(tx, rx);
-            } else {
-                // Fallback: If timeout, check raw level
-                // This catches missed edges due to race conditions
-                lseek(gpio_ready_->get_fd(), 0, SEEK_SET);
-                char val_buf[2] = {0};
-                read(gpio_ready_->get_fd(), val_buf, 2);
-                if (val_buf[0] == '1') {
-                    // Line is HIGH but we missed the edge
-                    performRead(tx, rx);
-                } else {
-                    // Line is LOW, truly waiting
-                    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "Waiting for Data Ready signal...");
-                }
-            }
+            // BYPASS HANDSHAKE: Just poll at ~10Hz
+            // The Pico PIO is always ready since CS is held low
+            performRead(tx, rx);
+            usleep(100000);  // 100ms between reads
         }
     }
 
@@ -194,8 +177,8 @@ private:
          tr.tx_buf = (unsigned long)tx.data();
          tr.rx_buf = (unsigned long)rx.data();
          tr.len = rx.size();
-         // Ultra-Low Speed: 10kHz to debug Logic vs Noise
-         tr.speed_hz = 10000; 
+         // 1MHz Target Speed
+         tr.speed_hz = 1000000; 
          tr.bits_per_word = 8;
          
          ioctl(spi_fd_, SPI_IOC_MESSAGE(1), &tr);

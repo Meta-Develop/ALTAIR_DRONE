@@ -1,94 +1,68 @@
-; SPI Slave (CPHA=0, CPOL=0)
+; SPI Slave TX Only (CPHA=0, CPOL=0)
 ; 
-; Pin assignments (configured in C):
-; - OUT: MISO
-; - IN:  MOSI
-; - JMP: CS
-; 
-; Hardcoded GPIOs for Wait (can be patched or configured if using pin mapping carefully):
-; But for simplicity in this project (fixed wiring), we will use hardcoded GPIOs in 'wait' instruction 
-; or use relative 'pin' if we map Input to SCK? 
-; Input is MOSI.
-; We can't map multiple inputs easily for 'wait'.
-; We will use hardcoded GPIO numbers for SCK (18) and CS (17) to be safe.
+; This is a simple byte-stream serializer.
+; C code handles CS detection via GPIO IRQ, which restarts PIO/DMA.
+; PIO just shifts out bits on SCK edges.
+;
+; Pin assignments:
+; - OUT: MISO (GP19)
+; - Hardcoded wait on SCK (GPIO 18)
 
 .program spi_slave
 
+; Entry point: PIO is reset here by C code on CS fall
+public entry_point:
 .wrap_target
-    ; Sync with CS (GP17). Wait for Low.
-    ; This replaces the CPU IRQ trigger.
-    wait 0 gpio 17
-
-    ; 1. Pull data
+    ; Pull next byte from TX FIFO (DMA feeds this)
     pull block      
+    
+    ; Alignment: DMA writes 8-bit to 32-bit FIFO (little endian: [DATA 00 00 00])
+    ; Shift out from bit 7 (MSB first). 
+    ; With shift_left=true and autopull=false, we shift from bit 31.
+    ; So we need to discard the upper 24 zero bits first.
     out null, 24
+    
+    ; Output Bit 7 (first bit) immediately - this is the "setup" before first SCK rise
     out pins, 1
     
+    ; Loop for remaining 7 bits
     set x, 6
 bitloop:
-    wait 1 gpio 18  ; Rising Edge (Sample)
-    in pins, 1
-    wait 0 gpio 18  ; Falling Edge (Shift)
-    out pins, 1
-    jmp x-- bitloop
-
-    ; Last bit
+    ; Wait for SCK Rising Edge (Master samples MISO here in CPHA=0)
     wait 1 gpio 18
-    in pins, 1
-    wait 0 gpio 18
     
-    push block
+    ; Wait for SCK Falling Edge (Slave shifts next bit here)
+    wait 0 gpio 18
+    out pins, 1
+    
+    jmp x-- bitloop
+    
+    ; After 8 bits sent, wait for last SCK cycle to complete
+    wait 1 gpio 18
+    wait 0 gpio 18
 .wrap
 
 % c-sdk {
 #include "hardware/gpio.h"
 
-static inline void spi_slave_init(PIO pio, uint sm, uint offset, uint pin_mosi, uint pin_cs, uint pin_sck, uint pin_miso) {
-    // 1. Configure Pin Mappings
-    // MISO is Output (Side Set? No, just OUT) -> OUT BASE
-    // MOSI is Input -> IN BASE
-    // CS and SCK are used by WAIT instructions (Hardcoded in PIO, but we init GPIOs here)
-    
+static inline void spi_slave_init(PIO pio, uint sm, uint offset, uint pin_miso) {
     pio_sm_config c = spi_slave_program_get_default_config(offset);
     
     // Set OUT pin (MISO)
     sm_config_set_out_pins(&c, pin_miso, 1);
     
-    // Set IN pin (MOSI)
-    sm_config_set_in_pins(&c, pin_mosi);
-    
-    // Set SIDESET? Not used.
-    
-    // Init GPIOs
-    pio_gpio_init(pio, pin_mosi);
-    pio_gpio_init(pio, pin_cs);
-    pio_gpio_init(pio, pin_sck);
+    // Init GPIO for MISO
     pio_gpio_init(pio, pin_miso);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_miso, 1, true); // Output
     
-    // Directions
-    // Input: MOSI, CS, SCK
-    // Output: MISO
-    pio_sm_set_consecutive_pindirs(pio, sm, pin_mosi, 1, false);
-    pio_sm_set_consecutive_pindirs(pio, sm, pin_cs, 1, false);
-    pio_sm_set_consecutive_pindirs(pio, sm, pin_sck, 1, false);
-    pio_sm_set_consecutive_pindirs(pio, sm, pin_miso, 1, true);
+    // Shift config: Left shift, no autopull, 8 bits
+    sm_config_set_out_shift(&c, false, false, 8);
     
-    // Shifters
-    // IN: Shift Right (LSB first)? SPI usually MSB First.
-    // OUT: Shift Right (MSB first)? 
-    // Shift Left = MSB First. Shift Right = LSB First.
-    // SPI Standard: MSB First.
-    // So shift LEFT, autopull/push off (we handle it).
-    // Actually, 'in pins, 1' shifts into ISR. default is right/left?
-    // Let's use standard MSB First: Shift Left.
-    // In: Shift Left, Autopush OFF (we push manually).
-    // Out: Shift Left, Autopull OFF (we pull manually).
+    // Run at full system clock
+    sm_config_set_clkdiv(&c, 1.0f);
     
-    sm_config_set_in_shift(&c, false, false, 8);  // Left, No Autopush, 8 bits
-    sm_config_set_out_shift(&c, false, false, 8); // Left, No Autopull, 8 bits
-    
-    // Initialize
+    // Initialize but don't enable yet (C code enables on CS fall)
     pio_sm_init(pio, sm, offset, &c);
-    pio_sm_set_enabled(pio, sm, true);
+    // pio_sm_set_enabled(pio, sm, true); // DON'T enable here
 }
 %}

@@ -52,7 +52,8 @@
 static const uint8_t HEADER[4] = {0xAA, 0xBB, 0xCC, 0xDD};
 
 // Global buffer (aligned for DMA)
-static uint8_t tx_buffer[TOTAL_SIZE] __attribute__((aligned(4)));
+// Global buffer (aligned for DMA Ring Buffer - 32 bytes)
+static uint8_t tx_buffer[TOTAL_SIZE] __attribute__((aligned(32)));
 
 // Sensor data (volatile for ISR access)
 static volatile ism330_data_t sensor_data;
@@ -87,21 +88,22 @@ void cs_irq_handler(uint gpio, uint32_t events) {
         // Debug: Toggle LED
         gpio_xor_mask(1u << PIN_LED);
         
-        // 2. Restart Logic (Immediate)
+        // 2. Restart PIO and DMA
+        pio_sm_set_enabled(pio, sm, false);
         dma_channel_abort(dma_tx);
-        pio_sm_restart(pio, sm);
         pio_sm_clear_fifos(pio, sm);
-        pio_sm_exec(pio, sm, pio_encode_jmp(offset));
+        pio_sm_restart(pio, sm);
+        pio_sm_exec(pio, sm, pio_encode_jmp(offset + spi_slave_offset_entry_point));
         
         dma_channel_set_trans_count(dma_tx, TOTAL_SIZE, false);
         dma_channel_set_read_addr(dma_tx, tx_buffer, true);
+        pio_sm_set_enabled(pio, sm, true);
         
         // Handshake
         gpio_put(PIN_DATA_READY, 0); 
         
-        // 3. Schedule Re-arm in 50ms (Safe for 10kHz speed)
-        // 10kHz = 100us/bit * 256 bits ~ 26ms. 
-        add_alarm_in_ms(50, rearm_irq_callback, NULL, false);
+        // 3. Schedule Re-arm in 5ms
+        add_alarm_in_ms(5, rearm_irq_callback, NULL, false);
     }
 }
 
@@ -131,6 +133,15 @@ int main() {
     gpio_set_dir(PIN_DATA_READY, GPIO_OUT);
     gpio_put(PIN_DATA_READY, 0);
 
+    // DIAGNOSTIC: Blink 3 times at startup to detect Reset Loops
+    for (int i=0; i<3; i++) {
+        gpio_put(PIN_LED, 1);
+        sleep_ms(100);
+        gpio_put(PIN_LED, 0);
+        sleep_ms(100);
+    }
+    printf("[MAIN] Boot Startup Sequence Complete.\n");
+
     // === SPI1 Master (Sensor) Init ===
     spi_init(SPI_SENSOR_PORT, 4000000);  // 4MHz for sensor
     gpio_set_function(PIN_SENSOR_SCK, GPIO_FUNC_SPI);
@@ -151,11 +162,11 @@ int main() {
     }
 
     // === PIO SPI Slave Init ===
-    uint offset = pio_add_program(pio, &spi_slave_program);
-    spi_slave_init(pio, sm, offset, PIN_MOSI, PIN_CS, PIN_SCK, PIN_MISO);
+    offset = pio_add_program(pio, &spi_slave_program);
+    spi_slave_init(pio, sm, offset, PIN_MISO);  // New signature: just MISO
     
-    // Reduce MISO Drive Strength to 2mA to reduce ringing/reflections
-    gpio_set_drive_strength(PIN_MISO, GPIO_DRIVE_STRENGTH_2MA);
+    // MISO Drive Strength: 12mA (Max) for strong signal
+    gpio_set_drive_strength(PIN_MISO, GPIO_DRIVE_STRENGTH_12MA);
     
     printf("[MAIN] PIO SPI Slave Initialized (MISO=%d, MOSI=%d, SCK=%d, CS=%d)\n", PIN_MISO, PIN_MOSI, PIN_SCK, PIN_CS);
 
@@ -189,25 +200,25 @@ int main() {
         &c,
         &pio->txf[sm],
         tx_buffer,
-        0xFFFFFFFF,     // Infinite count (conceptually). Or just Max.
-                        // Ideally we want Infinite. RP2040 DMA uses count. 
-                        // If we set count to Max, it runs for days.
-                        // Better to use chained DMA to self to restart, OR just re-trigger in loop.
-                        // But ring buffer wraps address, not count.
-        true            // Start Immediately!
+        TOTAL_SIZE,     // Finite count (restart on CS)
+        false           // Don't start yet (start on CS fall)
     );
     
-    // IRQ Removed: We rely on PIO 'wait 0 gpio CS' and DMA Ringing.
     printf("[MAIN] PIO SPI Slave Ready (DMA Ring Mode).\n");
+    printf("[MAIN] TX Buffer Address: %p (Aligned check: %s)\n", (void*)tx_buffer, ((uintptr_t)tx_buffer % 32 == 0) ? "OK" : "FAIL");
 
-    // --- Pre-fill Header Manual ---
-    // Seed with AA BB CC DD to debug connection
+    // --- Pre-fill Header ---
     tx_buffer[0] = 0xAA; tx_buffer[1] = 0xBB; tx_buffer[2] = 0xCC; tx_buffer[3] = 0xDD;
     
-    // Start DMA immediately to fill FIFO
-    dma_channel_start(dma_tx);
+    // --- GPIO IRQ Setup on CS (GP17) ---
+    gpio_set_irq_enabled_with_callback(PIN_CS, GPIO_IRQ_EDGE_FALL, true, &cs_irq_handler);
+    printf("[MAIN] CS Falling Edge IRQ Enabled on GP17.\n");
     
-    printf("[MAIN] PIO SPI Slave Ready (GPIO IRQ Mode).\n");
+    // Start DMA immediately to fill FIFO
+    // Start DMA immediately (Already started by configure, but harmless)
+    // dma_channel_start(dma_tx);
+    
+    // printf("[MAIN] PIO SPI Slave Ready (GPIO IRQ Mode).\n");
 
     // === Start 1000Hz Timer ===
     struct repeating_timer timer;
