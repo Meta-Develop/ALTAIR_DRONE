@@ -166,11 +166,8 @@ private:
     }
 
     void performRead(std::vector<uint8_t>& tx, std::vector<uint8_t>& rx) {
-         // Manual CS Assert
-         gpio_cs_->setValue(0);
-         
-         // Setup Delay: Give Pico time to trigger IRQ and start DMA
-         usleep(500); 
+         // NOTE: Kernel SPI driver controls CE0 automatically (GPIO 8)
+         // Manual GPIO 5 CS is no longer used since CS rewire to GPIO 8
          
          struct spi_ioc_transfer tr;
          memset(&tr, 0, sizeof(tr));
@@ -183,8 +180,9 @@ private:
          
          ioctl(spi_fd_, SPI_IOC_MESSAGE(1), &tr);
          
-         // Manual CS Deassert
-         gpio_cs_->setValue(1);
+         // Post-Transaction Delay: Give Pico time to complete CS IRQ handler
+         // and re-arm for next transaction (5ms dead time in Pico firmware)
+         usleep(6000);  // 6ms > 5ms re-arm delay
          
          processData(rx);
     }
