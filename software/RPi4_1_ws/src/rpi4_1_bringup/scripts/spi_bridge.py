@@ -59,10 +59,10 @@ class SpiBridgeNode(Node):
         try:
             self.cs_sensors = SysfsCS(pin=5) # GPIO 5 = Pin 29
             self.spi_sensors.open(0, 0) 
-            self.spi_sensors.max_speed_hz = 50000 # 50kHz for Debug
+            self.spi_sensors.max_speed_hz = 1000000 # 1MHz
             self.spi_sensors.mode = 0 
             self.spi_sensors.no_cs = True 
-            self.get_logger().info("SPI Sensors (SPI0 + Manual CS Pin 29) Initialized @ 50kHz")
+            self.get_logger().info("SPI Sensors (SPI0 + Manual CS Pin 29) Initialized @ 1MHz")
         except Exception as e:
             self.get_logger().error(f"Failed to open SPI Sensors: {e}")
 
