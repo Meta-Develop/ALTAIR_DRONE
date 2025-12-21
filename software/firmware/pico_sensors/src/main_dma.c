@@ -69,6 +69,7 @@ void cs_loopback_callback(uint gpio, uint32_t events) {
     if (gpio == PIN_CS_LOOPBACK && (events & GPIO_IRQ_EDGE_FALL)) {
         // Transaction Start (CS Low)
         gpio_xor_mask(1u << PIN_LED); // Toggle LED
+        gpio_put(PIN_DATA_READY, 0);  // Clear Data Ready signal
         
         // 1. Abort current DMA (if any) to reset pointer
         dma_channel_abort(dma_tx);
@@ -202,10 +203,12 @@ int main() {
             floats[3] = sensor_data.accel[1];
             floats[4] = sensor_data.accel[2];
             
-            // Gyro (floats 5-7)
             floats[5] = sensor_data.gyro[0];
             floats[6] = sensor_data.gyro[1];
             floats[7] = sensor_data.gyro[2];
+            
+            // Signal RPi4 that data is ready (Rising Edge)
+            gpio_put(PIN_DATA_READY, 1);
         }
 
         // === Continuously keep TX FIFO filled ===
