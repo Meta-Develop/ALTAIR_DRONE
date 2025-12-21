@@ -90,4 +90,4 @@ bool ism330_data_ready(spi_inst_t *spi, uint cs_pin) {
     // Bit 0 = XLDA (Accel ready), Bit 1 = GDA (Gyro ready)
     return (status & 0x03) == 0x03;
 }
-```
+
