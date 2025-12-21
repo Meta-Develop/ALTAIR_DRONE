@@ -60,40 +60,38 @@ static volatile uint32_t sample_count = 0;
 // DMA channels
 static int dma_tx;
 
-// TX buffer index - volatile for ISR access
-static volatile uint8_t tx_idx = 0;
-
-// Debug counter
-static volatile uint8_t isr_cnt = 0;
-
-// CS loopback IRQ handler - fires on RISING edge (Transaction Complete)
+// CS loopback IRQ handler - fires on FALLING edge (Transaction Start)
 void cs_loopback_callback(uint gpio, uint32_t events) {
-    if (gpio == PIN_CS_LOOPBACK && (events & GPIO_IRQ_EDGE_RISE)) {
-        // CS went HIGH - transaction finished!
-        // Prepare data for the NEXT transaction
+    if (gpio == PIN_CS_LOOPBACK && (events & GPIO_IRQ_EDGE_FALL)) {
+        // CS went LOW - transaction starting!
         
         // Debug: Toggle LED
         gpio_xor_mask(1u << PIN_LED);
         
-        // Update ISR count in buffer (Byte 4)
-        isr_cnt++;
-        tx_buffer[4] = isr_cnt;
-        
-        // Disable SPI to flush FIFOs (Safe now as CS is High)
+        // Disable SPI to flush FIFOs
         spi_get_hw(SPI_SLAVE_PORT)->cr1 &= ~SPI_SSPCR1_SSE_BITS;
         
-        // Re-enable SPI immediately (empty FIFO state)
+        // Pre-fill TX FIFO
+        // Write 2 Dummy bytes to counter potential "swallowing" during enable
+        // We write DIRECTLY to DR while disabled.
+        spi_get_hw(SPI_SLAVE_PORT)->dr = 0x00;
+        spi_get_hw(SPI_SLAVE_PORT)->dr = 0x00;
+        
+        // Write actual header/data (up to FIFO depth of 8)
+        // We wrote 2 dummies, so we can write 6 real bytes (Total 8)
+        // TX Buffer: [AA, BB, CC, DD, ...] - index 0..5
+        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[0];
+        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[1];
+        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[2];
+        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[3];
+        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[4];
+        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[5];
+        
+        // Re-enable SPI now that FIFO is primed
         spi_get_hw(SPI_SLAVE_PORT)->cr1 |= SPI_SSPCR1_SSE_BITS;
         
-        // NOW Pre-fill TX FIFO with next 8 bytes
-        // We are enabled, but CS is High, so Master won't clock yet.
-        for (int i = 0; i < 8; i++) {
-            while (!spi_is_writable(SPI_SLAVE_PORT)); 
-            spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[i];
-        }
-        
-        // Set index to 8 - main loop keeps the rest filled
-        tx_idx = 8;
+        // Set index to 6 - main loop continues from here
+        tx_idx = 6;
     }
 }
 
@@ -189,47 +187,25 @@ int main() {
     // GP21 (Pin 27) is jumpered to GP17 (Pin 22) - CS signal
     gpio_init(PIN_CS_LOOPBACK);
     gpio_set_dir(PIN_CS_LOOPBACK, GPIO_IN);
-    // Initial Pre-fill for first transaction
-    // Debug: Store SR values in buffer to diagnose FIFO behavior
+    // Initial Pre-fill
+    // TX Buffer: Header + Data
+    tx_buffer[0] = 0xAA;
+    tx_buffer[1] = 0xBB;
+    tx_buffer[2] = 0xCC;
+    tx_buffer[3] = 0xDD;
+    // Data starts at index 4
     
-    // Read SR before writing: Check TFE (bit 0) and TNF (bit 1)
-    // TFE=1 (Empty), TNF=1 (Not Full) -> SR should be 0x3 (or similar)
-    uint32_t sr_before = spi_get_hw(SPI_SLAVE_PORT)->sr;
-    tx_buffer[0] = (uint8_t)sr_before; 
-    
-    // Write 1 byte (0xAA)
-    while (!spi_is_writable(SPI_SLAVE_PORT)); 
-    spi_get_hw(SPI_SLAVE_PORT)->dr = 0xAA;
-    
-    // Read SR after 1 byte
-    uint32_t sr_mid = spi_get_hw(SPI_SLAVE_PORT)->sr;
-    tx_buffer[1] = (uint8_t)sr_mid;
-    
-    // Write remaining 7 bytes
-    for (int i = 0; i < 7; i++) {
-        while (!spi_is_writable(SPI_SLAVE_PORT)); 
-        spi_get_hw(SPI_SLAVE_PORT)->dr = 0xBB + i;
-    }
-    
-    // Read SR after 8 bytes
-    // Should be Full? TNF=0? TFE=0?
-    uint32_t sr_after = spi_get_hw(SPI_SLAVE_PORT)->sr;
-    tx_buffer[2] = (uint8_t)sr_after;
-    
-    // Byte 3: Dummy/Padding
-    tx_buffer[3] = 0xCC;
-    
-    // ISR Count (at offset 4)
-    tx_buffer[4] = 0; // Will be incremented by ISR
+    // We don't pre-fill FIFO here because ISR will do it on first Falling Edge
+    // Or we can pre-fill:
+    // With 2 dummies logic, the first transaction might need priming?
+    // Let's just set tx_idx and let ISR handle it.
+    tx_idx = 4;
 
-    tx_idx = 8; // Main loop continues
-
-    // Enable Rising Edge IRQ
-    gpio_set_irq_enabled_with_callback(PIN_CS_LOOPBACK, GPIO_IRQ_EDGE_RISE, true, &cs_loopback_callback);
-    printf("[MAIN] CS Rising Edge IRQ Enabled.\n");
+    // Enable FALLING Edge IRQ for CS detection (Start of Transaction)
+    gpio_set_irq_enabled_with_callback(PIN_CS_LOOPBACK, GPIO_IRQ_EDGE_FALL, true, &cs_loopback_callback);
+    printf("[MAIN] CS Falling Edge IRQ Enabled.\n");
     
-    // Don't start DMA here - usage of DMA is mixed/suspended for this debug
-    printf("[MAIN] Debug Mode: SPI status reporting.\n");
+    printf("[MAIN] SPI Slave TX (FIFO Flush on CS Fall) initialized.\n");
 
     // === Start 1000Hz Timer ===
     struct repeating_timer timer;
@@ -248,17 +224,8 @@ int main() {
             new_data_ready = false;
             
             // Pack data into buffer (DMA will send this)
-            // Note: Byte 0-3 are debug values, Byte 4 is ISR count.
-            // Payload starts at Byte 5?
-            // Original layout: Header (4 bytes) + Floats.
-            // My debug layout: [SR1, SR2, SR3, CC, ISR_CNT, ...floats...]
-            // So floats start at offset 5.
-            
-            float *floats = (float*)(tx_buffer + 8); // Align to 4 bytes? 
-            // Wait, tx_buffer is uint8_t.
-            // If I want floats aligned, I should use offset 8 (multiple of 4).
-            // tx_buffer[0..4] used. 5,6,7 unused? 
-            // Let's use offset 8.
+            // Header is at 0-3. Floats start at 4.
+            float *floats = (float*)(tx_buffer + 4); 
             
             floats[0] = (float)sample_count;
             floats[1] = sensor_data.temp;
