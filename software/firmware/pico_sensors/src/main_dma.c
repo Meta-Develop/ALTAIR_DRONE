@@ -60,9 +60,11 @@ static volatile bool new_data_ready = false;
 static volatile uint32_t sample_count = 0;
 
 // DMA
+// DMA
 int dma_tx;
 PIO pio = pio0;
 uint sm = 0;
+uint offset = 0; // Make global for ISR
 
 // CS Edge Callback - Resync DMA
 // CS (GP17) Falling Edge Handler
@@ -73,11 +75,13 @@ void cs_irq_handler(uint gpio, uint32_t events) {
         
         // Transaction Start (CS Low)
         
-        // 1. Abort current DMA to reset pointer
+        // 1. Abort current DMA
         dma_channel_abort(dma_tx);
         
-        // 2. Clear FIFOs if needed (optional)
-        // pio_sm_clear_fifos(pio, sm);
+        // 2. Restart PIO State Machine (Sync to fresh Byte Loop)
+        pio_sm_restart(pio, sm);
+        pio_sm_clear_fifos(pio, sm);
+        pio_sm_exec(pio, sm, pio_encode_jmp(offset));
         
         // 3. Restart DMA: Reset Count AND Address
         dma_channel_set_trans_count(dma_tx, TOTAL_SIZE, false);

@@ -15,14 +15,10 @@
 .program spi_slave
 
 .wrap_target
-    ; 1. Wait for CS (GP17) to go Low
-    wait 0 gpio 17
+    ; Loop Entry: CPU jumps here on CS Fall.
+    ; We immediately start processing the byte stream.
     
-    ; Signal IRQ for DMA re-arm (Replaces physical loopback)
-    irq 0
-    
-    ; 2. Prepare first bit of data (CPHA=0 means data valid before first clock edge)
-    ; Pull data from TX FIFO to OSR. 'block' means wait if empty.
+    ; 1. Pull data (32-bit word from DMA)
     pull block      
     
     ; ALIGNMENT FIX: DMA writes 8 bits [00 00 00 AA]. 
