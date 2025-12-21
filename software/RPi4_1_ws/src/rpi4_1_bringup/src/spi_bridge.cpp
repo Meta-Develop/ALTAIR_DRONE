@@ -186,9 +186,8 @@ private:
          // Manual CS Assert
          gpio_cs_->setValue(0);
          
-         // Small delay? 1us? 
-         // For 10MHz, not critical but good practice.
-         // usleep(1); // overhead might be too high.
+         // Setup Delay: Give Pico time to trigger IRQ and start DMA
+         usleep(50); 
          
          struct spi_ioc_transfer tr;
          memset(&tr, 0, sizeof(tr));

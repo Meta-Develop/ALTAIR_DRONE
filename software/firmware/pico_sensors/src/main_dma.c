@@ -77,8 +77,9 @@ void cs_loopback_callback(uint gpio, uint32_t events) {
         // 2. Clear PIO FIFOs (Optional, ensures fresh start)
         pio_sm_clear_fifos(pio, sm);
         
-        // 3. Restart DMA from start of buffer
-        dma_channel_set_read_addr(dma_tx, tx_buffer, true);
+        // 3. Restart DMA: Reset Count AND Address
+        dma_channel_set_trans_count(dma_tx, TOTAL_SIZE, false);
+        dma_channel_set_read_addr(dma_tx, tx_buffer, true); // Trigger check
         
         // Restart PIO SM? Not strictly needed if it waits for CS.
         // But helpful to clear any stuck state.
