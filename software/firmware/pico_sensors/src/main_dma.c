@@ -65,16 +65,13 @@ PIO pio = pio0;
 uint sm = 0;
 
 // CS Edge Callback - Resync DMA
-// PIO IRQ Handler (Replaces CS Loopback)
-void pio_irq_handler() {
-    // Check if it's our SM causing IRQ
-    if (pio0_hw->irq & 1) {
-        pio0_hw->irq = 1; // Clear IRQ 0
-        
+// CS (GP17) Falling Edge Handler
+void cs_irq_handler(uint gpio, uint32_t events) {
+    if (gpio == PIN_CS && (events & GPIO_IRQ_EDGE_FALL)) {
         // Debug: Toggle LED to prove IRQ fired (CS Detected)
         gpio_xor_mask(1u << PIN_LED);
-
-        // Transaction Start (CS Low detected by PIO)
+        
+        // Transaction Start (CS Low)
         
         // 1. Abort current DMA to reset pointer
         dma_channel_abort(dma_tx);
@@ -173,12 +170,10 @@ int main() {
     // If Slave stalls, MISO holds last bit?
     // That's acceptable for overflow.
     
-    // --- PIO IRQ Setup ---
-    // Enable PIO IRQ 0 for this SM
-    // 'irq 0' in PIO program maps to bit 0 of irq flags
-    pio_set_irq0_source_enabled(pio, pis_interrupt0, true);
-    irq_set_exclusive_handler(PIO0_IRQ_0, pio_irq_handler);
-    irq_set_enabled(PIO0_IRQ_0, true);
+    // --- GPIO IRQ Setup on CS (GP17) ---
+    // This fires even if PIO is using the pin
+    gpio_set_irq_enabled_with_callback(PIN_CS, GPIO_IRQ_EDGE_FALL, true, &cs_irq_handler);
+    printf("[MAIN] CS Falling Edge IRQ Enabled on GP17.\n");
 
     // --- Pre-fill Header Manual ---
     // Seed with AA BB CC DD to debug connection
@@ -187,7 +182,7 @@ int main() {
     // Start DMA immediately to fill FIFO
     dma_channel_start(dma_tx);
     
-    printf("[MAIN] PIO SPI Slave Ready (IRQ Mode).\n");
+    printf("[MAIN] PIO SPI Slave Ready (GPIO IRQ Mode).\n");
 
     // === Start 1000Hz Timer ===
     struct repeating_timer timer;
