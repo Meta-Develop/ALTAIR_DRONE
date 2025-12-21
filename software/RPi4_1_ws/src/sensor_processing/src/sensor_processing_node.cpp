@@ -1,6 +1,5 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
-#include <sensor_msgs/msg/magnetic_field.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <vector>
 #include <cmath>
@@ -42,9 +41,8 @@ public:
             std::bind(&SensorProcessingNode::escCallback, this, std::placeholders::_1));
 
         imu_pub_ = this->create_publisher<sensor_msgs::msg::Imu>("/imu/filtered", pub_qos);
-        mag_pub_ = this->create_publisher<sensor_msgs::msg::MagneticField>("/mag", pub_qos);
         
-        RCLCPP_INFO(this->get_logger(), "Sensor Processing Node Started. Mode: 1kHz Batch Processing (6/9 DoF)");
+        RCLCPP_INFO(this->get_logger(), "Sensor Processing Node Started. Mode: 1kHz Batch Processing");
     }
 
 private:
@@ -95,15 +93,9 @@ private:
 
     void imuBatchCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg)
     {
-        if (msg->data.empty()) return;
+        if (msg->data.empty() || msg->data.size() % 6 != 0) return;
 
-        // Determine Stride (6 or 9)
-        int stride = 0;
-        if (msg->data.size() % 9 == 0) stride = 9;
-        else if (msg->data.size() % 6 == 0) stride = 6;
-        else return; // Invalid size
-
-        int samples = msg->data.size() / stride;
+        int samples = msg->data.size() / 6;
         rclcpp::Time now = this->get_clock()->now();
         uint64_t now_ns = now.nanoseconds();
         uint64_t dt_ns = 1000000;
@@ -119,13 +111,11 @@ private:
             // sample 0 (oldest) -> time: now - (samples-1-i)*dt
             // sample 19 (newest) -> time: now
             uint64_t sample_time_ns = now_ns - ((samples - 1 - i) * dt_ns);
-            rclcpp::Time timestamp(sample_time_ns);
-            
-            imu_msg.header.stamp = timestamp;
+            imu_msg.header.stamp = rclcpp::Time(sample_time_ns);
             imu_msg.header.frame_id = "base_link";
 
-            // Unpack Data (Order: ax, ay, az, gx, gy, gz, [mx, my, mz])
-            int base_idx = i * stride;
+            // Unpack Data (Order: ax, ay, az, gx, gy, gz)
+            int base_idx = i * 6;
             
             // Apply Scaling
             imu_msg.linear_acceleration.x = msg->data[base_idx + 0] * ACCEL_SCALE;
@@ -146,19 +136,6 @@ private:
 
             // Publish individualized message
             imu_pub_->publish(imu_msg);
-            
-            // Handle Mag
-            if (stride == 9) {
-                sensor_msgs::msg::MagneticField mag_msg;
-                mag_msg.header.stamp = timestamp;
-                mag_msg.header.frame_id = "base_link"; // Or mag_link
-                
-                mag_msg.magnetic_field.x = msg->data[base_idx + 6]; // Unit? Gauss? Tesla?
-                mag_msg.magnetic_field.y = msg->data[base_idx + 7]; // Assume driver sends Tesla or needs scaling
-                mag_msg.magnetic_field.z = msg->data[base_idx + 8]; // Driver stub sends raw placeholder mostly
-                
-                mag_pub_->publish(mag_msg);
-            }
         }
     }
 
@@ -190,7 +167,6 @@ private:
     rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr imu_batch_sub_;
     rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr esc_sub_;
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
-    rclcpp::Publisher<sensor_msgs::msg::MagneticField>::SharedPtr mag_pub_;
     
     double imu_sample_rate_;
     NotchFilter gyro_x_filter_, gyro_y_filter_, gyro_z_filter_;

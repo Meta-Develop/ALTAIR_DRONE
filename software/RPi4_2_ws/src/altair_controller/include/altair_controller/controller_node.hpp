@@ -12,18 +12,11 @@
 #include <mutex>
 #include <atomic>
 
-// Acados C Interfaces
-extern "C" {
-#include "acados_c/ocp_nlp_interface.h"
-#include "acados_solver_altair_drone.h"
-}
-
 namespace altair_controller {
 
 enum class ControlMode {
     PID_MIXER,
-    NMPC,
-    HIERARCHICAL
+    NMPC
 };
 
 class AltairController : public rclcpp::Node {
@@ -48,14 +41,13 @@ private:
 
     // Logic
     Eigen::VectorXf calculate_pid_output(const Eigen::VectorXd& state, const Eigen::VectorXd& setpoint);
-
+    Eigen::VectorXf calculate_nmpc_output();
 
     // ROS Interfaces
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_cmd_vel_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_odom_;
     rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr sub_control_mode_;
-    rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr pub_esc_;
-    rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr pub_servos_;
+    rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr pub_actuators_;
     
     rclcpp::TimerBase::SharedPtr timer_control_;
     
@@ -69,7 +61,6 @@ private:
 
     // Geometry / Physics
     double mass_;
-    double arm_length_, k_t_, k_m_;
     Eigen::Matrix3d inertia_;
     Eigen::MatrixXf allocation_matrix_; // 12x6 (Actuators x Wrench)
 
@@ -82,20 +73,10 @@ private:
     std::thread mpc_thread_;
     std::atomic<bool> mpc_running_;
     Eigen::VectorXf mpc_next_u_; // Next control input from MPC
-    Eigen::VectorXf mpc_next_x_; // Next optimal state from MPC (for feedback)
     std::mutex mpc_mutex_;
-
-    // Acados Structs
-    altair_drone_solver_capsule* capsule_;
-    ocp_nlp_config* nlp_config_;
-    ocp_nlp_dims* nlp_dims_;
-    ocp_nlp_in* nlp_in_;
-    ocp_nlp_out* nlp_out_;
-    ocp_nlp_solver* nlp_solver_;
 
     // PID Gains
     double kp_pos_, kd_pos_, kp_att_, kd_att_;
-    double kp_nmpc_; 
 };
 
 } // namespace altair_controller
