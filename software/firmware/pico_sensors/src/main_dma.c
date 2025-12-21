@@ -60,21 +60,15 @@ static volatile uint32_t sample_count = 0;
 // DMA channels
 static int dma_tx;
 
+// TX buffer index - volatile for ISR access
+static volatile uint8_t tx_idx = 0;
+
 // CS loopback IRQ handler - fires on falling edge (transaction start)
 void cs_loopback_callback(uint gpio, uint32_t events) {
     if (gpio == PIN_CS_LOOPBACK && (events & GPIO_IRQ_EDGE_FALL)) {
         // CS went LOW - transaction starting!
-        // Immediately abort any pending DMA and restart from buffer start
-        dma_channel_abort(dma_tx);
-        
-        // Pre-fill TX FIFO with as much data as possible (FIFO is 8 bytes)
-        for (int i = 0; i < 8 && spi_is_writable(SPI_SLAVE_PORT); i++) {
-            spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[i];
-        }
-        
-        // Restart DMA from byte 8 onwards
-        dma_channel_set_read_addr(dma_tx, tx_buffer + 8, false);
-        dma_channel_set_trans_count(dma_tx, TOTAL_SIZE - 8, true);
+        // Just reset index - main loop will fill FIFO from position 0
+        tx_idx = 0;
     }
 }
 
@@ -208,6 +202,14 @@ int main() {
             floats[5] = sensor_data.gyro[0];
             floats[6] = sensor_data.gyro[1];
             floats[7] = sensor_data.gyro[2];
+        }
+
+        // === Continuously keep TX FIFO filled ===
+        // ISR resets tx_idx to 0 on CS falling edge
+        // Main loop fills FIFO from current index position
+        while (spi_is_writable(SPI_SLAVE_PORT) && tx_idx < TOTAL_SIZE) {
+            spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[tx_idx];
+            tx_idx++;
         }
 
         // Drain RX FIFO (we don't need master's data)
