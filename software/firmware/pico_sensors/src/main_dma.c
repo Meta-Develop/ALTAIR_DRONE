@@ -82,15 +82,15 @@ void cs_loopback_callback(uint gpio, uint32_t events) {
         // Disable SPI to flush FIFOs (Safe now as CS is High)
         spi_get_hw(SPI_SLAVE_PORT)->cr1 &= ~SPI_SSPCR1_SSE_BITS;
         
-        // Pre-fill TX FIFO with next 8 bytes
-        // No dummy byte needed if reset works properly when CS is High
+        // Re-enable SPI immediately (empty FIFO state)
+        spi_get_hw(SPI_SLAVE_PORT)->cr1 |= SPI_SSPCR1_SSE_BITS;
+        
+        // NOW Pre-fill TX FIFO with next 8 bytes
+        // We are enabled, but CS is High, so Master won't clock yet.
         for (int i = 0; i < 8; i++) {
             while (!spi_is_writable(SPI_SLAVE_PORT)); 
             spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[i];
         }
-        
-        // Re-enable SPI
-        spi_get_hw(SPI_SLAVE_PORT)->cr1 |= SPI_SSPCR1_SSE_BITS;
         
         // Set index to 8 - main loop keeps the rest filled
         tx_idx = 8;
