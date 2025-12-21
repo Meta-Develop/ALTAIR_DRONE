@@ -59,6 +59,9 @@ static volatile uint32_t sample_count = 0;
 static int dma_tx;
 static dma_channel_config dma_tx_config;
 
+// TX buffer index (volatile for ISR access)
+static volatile uint8_t tx_idx = 0;
+
 // Timer callback - runs at 1000Hz
 bool timer_1khz_callback(struct repeating_timer *t) {
     // Read sensor (approximately 14 bytes * 8 bits / 4MHz = ~28us)
@@ -71,6 +74,24 @@ bool timer_1khz_callback(struct repeating_timer *t) {
     sample_count++;
     
     return true;  // Keep repeating
+}
+
+// CS GPIO Interrupt - fires on both edges
+void cs_gpio_callback(uint gpio, uint32_t events) {
+    if (gpio == PIN_SLAVE_CS) {
+        if (events & GPIO_IRQ_EDGE_FALL) {
+            // CS went LOW: transaction starting!
+            // Immediately reset index and pre-fill TX FIFO
+            tx_idx = 0;
+            
+            // Pre-fill TX FIFO with as much data as possible
+            while (spi_is_writable(SPI_SLAVE_PORT) && tx_idx < (PAYLOAD_SIZE + 4)) {
+                spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[tx_idx];
+                tx_idx++;
+            }
+        }
+        // On rising edge, we don't need to do anything - index is already reset for next transaction
+    }
 }
 
 // Configure fast input for SPI slave pins
@@ -118,6 +139,7 @@ int main() {
     gpio_set_function(PIN_SLAVE_RX, GPIO_FUNC_SPI);
     gpio_set_function(PIN_SLAVE_SCK, GPIO_FUNC_SPI);
     gpio_set_function(PIN_SLAVE_TX, GPIO_FUNC_SPI);
+    // Note: CS is still SPI function, but we also monitor it with GPIO IRQ
     gpio_set_function(PIN_SLAVE_CS, GPIO_FUNC_SPI);
 
     configure_fast_spi_slave();
@@ -129,7 +151,14 @@ int main() {
     // Pre-fill TX FIFO 
     for (int i = 0; i < 8 && spi_is_writable(SPI_SLAVE_PORT); i++) {
         spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[i];
+        tx_idx = i + 1;
     }
+
+    // === Enable CS GPIO IRQ for falling edge (transaction start) ===
+    // This requires setting up GPIO as input for monitoring while SPI function is active
+    // On RP2350, we need to use the IO bank interrupt
+    gpio_set_irq_enabled_with_callback(PIN_SLAVE_CS, GPIO_IRQ_EDGE_FALL, true, &cs_gpio_callback);
+    printf("[MAIN] CS IRQ enabled for pre-fill sync.\n");
 
     // === Start 1000Hz Timer ===
     struct repeating_timer timer;
@@ -139,12 +168,6 @@ int main() {
     uint32_t last_heartbeat = 0;
     uint32_t last_sample_count = 0;
     uint32_t last_rate_check = 0;
-    
-    // TX FIFO index for continuous loading
-    volatile uint8_t tx_idx = 0;
-    
-    // CS state tracking for sync
-    bool last_cs_state = gpio_get(PIN_SLAVE_CS);
 
     while (true) {
         // Update buffer when new sensor data is available
@@ -168,27 +191,12 @@ int main() {
             floats[7] = sensor_data.gyro[2];
         }
 
-        // === CS-based synchronization ===
-        // When CS goes HIGH (end of transaction), flush FIFO and reset index
-        bool current_cs = gpio_get(PIN_SLAVE_CS);
-        if (current_cs && !last_cs_state) {
-            // CS rising edge: transaction ended
-            // Flush TX FIFO by reading until empty
-            while (spi_is_readable(SPI_SLAVE_PORT)) {
-                volatile uint8_t dummy = spi_get_hw(SPI_SLAVE_PORT)->dr;
-                (void)dummy;
-            }
-            // Reset TX index and prime FIFO with start of buffer
-            tx_idx = 0;
-            // Clear any residual TX FIFO data (there's no direct flush, but we can drain by writing zeros)
-            // Actually, we just reset our index - next fill will start from 0
-        }
-        last_cs_state = current_cs;
-
         // === Continuously keep TX FIFO filled ===
-        while (spi_is_writable(SPI_SLAVE_PORT)) {
+        // The ISR resets tx_idx on CS falling edge
+        // Main loop keeps filling from where ISR left off
+        while (spi_is_writable(SPI_SLAVE_PORT) && tx_idx < (PAYLOAD_SIZE + 4)) {
             spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[tx_idx];
-            tx_idx = (tx_idx + 1) % (PAYLOAD_SIZE + 4);
+            tx_idx++;
         }
         
         // Drain RX FIFO (we don't need master's data)
