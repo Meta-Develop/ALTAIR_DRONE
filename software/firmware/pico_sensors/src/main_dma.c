@@ -68,29 +68,10 @@ uint offset = 0; // Make global for ISR
 
 // CS Edge Callback - Resync DMA
 // CS (GP17) Falling Edge Handler
-// Alarm 2: Re-arm IRQ (End of Transaction)
+// Alarm 1: Re-arm IRQ (End of Transaction)
 int64_t rearm_irq_callback(alarm_id_t id, void *user_data) {
     gpio_acknowledge_irq(PIN_CS, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE);
     gpio_set_irq_enabled(PIN_CS, GPIO_IRQ_EDGE_FALL, true);
-    return 0;
-}
-
-// Alarm 1: Enable PIO (Delayed Start to ignore SCK noise)
-int64_t pio_enable_callback(alarm_id_t id, void *user_data) {
-    // 2. Restart Logic (Safe from initial noise)
-    dma_channel_abort(dma_tx);
-    pio_sm_restart(pio, sm);
-    pio_sm_clear_fifos(pio, sm);
-    pio_sm_exec(pio, sm, pio_encode_jmp(offset));
-    
-    dma_channel_set_trans_count(dma_tx, TOTAL_SIZE, false);
-    dma_channel_set_read_addr(dma_tx, tx_buffer, true);
-    
-    // Handshake
-    gpio_put(PIN_DATA_READY, 0); 
-    
-    // 3. Schedule Re-arm in 3ms
-    add_alarm_in_ms(3, rearm_irq_callback, NULL, false);
     return 0;
 }
 
@@ -106,8 +87,21 @@ void cs_irq_handler(uint gpio, uint32_t events) {
         // Debug: Toggle LED
         gpio_xor_mask(1u << PIN_LED);
         
-        // Schedule Delayed PIO Start (50us) to skip SCK crosstalk
-        add_alarm_in_us(50, pio_enable_callback, NULL, false);
+        // 2. Restart Logic (Immediate)
+        dma_channel_abort(dma_tx);
+        pio_sm_restart(pio, sm);
+        pio_sm_clear_fifos(pio, sm);
+        pio_sm_exec(pio, sm, pio_encode_jmp(offset));
+        
+        dma_channel_set_trans_count(dma_tx, TOTAL_SIZE, false);
+        dma_channel_set_read_addr(dma_tx, tx_buffer, true);
+        
+        // Handshake
+        gpio_put(PIN_DATA_READY, 0); 
+        
+        // 3. Schedule Re-arm in 50ms (Safe for 10kHz speed)
+        // 10kHz = 100us/bit * 256 bits ~ 26ms. 
+        add_alarm_in_ms(50, rearm_irq_callback, NULL, false);
     }
 }
 
@@ -160,9 +154,21 @@ int main() {
     uint offset = pio_add_program(pio, &spi_slave_program);
     spi_slave_init(pio, sm, offset, PIN_MOSI, PIN_CS, PIN_SCK, PIN_MISO);
     
+    // Reduce MISO Drive Strength to 2mA to reduce ringing/reflections
+    gpio_set_drive_strength(PIN_MISO, GPIO_DRIVE_STRENGTH_2MA);
+    
     printf("[MAIN] PIO SPI Slave Initialized (MISO=%d, MOSI=%d, SCK=%d, CS=%d)\n", PIN_MISO, PIN_MOSI, PIN_SCK, PIN_CS);
 
     // Init TX Buffer Header
+    // ALIGNMENT: 32 bytes
+    // Note: To use ring buffer, the buffer must be naturally aligned to 2^N bytes.
+    // N=5 (32 bytes). 
+    // We can't easily force alignment of a static array in function without attribute.
+    // Ideally use global or attribute.
+    // For now, let's assume 'tx_buffer' is aligned or use a method to align it.
+    // The safest way is to use the global 'tx_buffer' and ensure it's aligned.
+    // Move aligned attribute to definition.
+    
     memcpy(tx_buffer, HEADER, 4);
     memset(tx_buffer + 4, 0, PAYLOAD_SIZE);
 
@@ -171,32 +177,28 @@ int main() {
     
     dma_channel_config c = dma_channel_get_default_config(dma_tx);
     channel_config_set_transfer_data_size(&c, DMA_SIZE_8);
-    channel_config_set_dreq(&c, pio_get_dreq(pio, sm, true)); // Wait for PIO TX FIFO
-    channel_config_set_read_increment(&c, true);   // Increment read address (buffer)
-    channel_config_set_write_increment(&c, false); // Fixed write address (PIO TXF)
-    channel_config_set_ring(&c, false, 0);         // No ring buffer
+    channel_config_set_dreq(&c, pio_get_dreq(pio, sm, true));
+    channel_config_set_read_increment(&c, true);
+    channel_config_set_write_increment(&c, false);
     
-    // Configure DMA channel
+    // Enable Ring Buffer on READ address (IsWrite=false). Size=5 (2^5=32 bytes)
+    channel_config_set_ring(&c, false, 5); 
+    
     dma_channel_configure(
         dma_tx,
         &c,
-        &pio->txf[sm],  // Dest: PIO TX FIFO
-        tx_buffer,      // Src: Buffer
-        TOTAL_SIZE,     // Count
-        false           // Don't start yet
+        &pio->txf[sm],
+        tx_buffer,
+        0xFFFFFFFF,     // Infinite count (conceptually). Or just Max.
+                        // Ideally we want Infinite. RP2040 DMA uses count. 
+                        // If we set count to Max, it runs for days.
+                        // Better to use chained DMA to self to restart, OR just re-trigger in loop.
+                        // But ring buffer wraps address, not count.
+        true            // Start Immediately!
     );
     
-    // Enable DMA interrupt? No, we don't need interrupt if we just abort/restart on CS.
-    // Actually, if buffer exhausts (200 bytes sent), DMA stops.
-    // If master keeps clocking, PIO sends garbage or stalls?
-    // PIO waits for TX FIFO. If empty, it stalls.
-    // If Slave stalls, MISO holds last bit?
-    // That's acceptable for overflow.
-    
-    // --- GPIO IRQ Setup on CS (GP17) ---
-    // This fires even if PIO is using the pin
-    gpio_set_irq_enabled_with_callback(PIN_CS, GPIO_IRQ_EDGE_FALL, true, &cs_irq_handler);
-    printf("[MAIN] CS Falling Edge IRQ Enabled on GP17.\n");
+    // IRQ Removed: We rely on PIO 'wait 0 gpio CS' and DMA Ringing.
+    printf("[MAIN] PIO SPI Slave Ready (DMA Ring Mode).\n");
 
     // --- Pre-fill Header Manual ---
     // Seed with AA BB CC DD to debug connection

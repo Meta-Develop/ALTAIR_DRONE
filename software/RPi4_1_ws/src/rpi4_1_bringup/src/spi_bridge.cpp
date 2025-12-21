@@ -194,8 +194,8 @@ private:
          tr.tx_buf = (unsigned long)tx.data();
          tr.rx_buf = (unsigned long)rx.data();
          tr.len = rx.size();
-         // Restore speed to 1MHz (Target)
-         tr.speed_hz = 1000000; 
+         // Ultra-Low Speed: 10kHz to debug Logic vs Noise
+         tr.speed_hz = 10000; 
          tr.bits_per_word = 8;
          
          ioctl(spi_fd_, SPI_IOC_MESSAGE(1), &tr);
@@ -217,10 +217,18 @@ private:
         // Expected layout after 4-byte header (0xAABBCCDD):
         // floats[0]=counter, [1]=temp, [2-4]=accel, [5-7]=gyro, [8-10]=mag
         if (rx[0] == HEADER[0] && rx[1] == HEADER[1] && rx[2] == HEADER[2] && rx[3] == HEADER[3]) {
+            // Interpret payload as floats
+            // Offset 4 bytes (Header) -> Start of Floats
+            const float* payload = reinterpret_cast<const float*>(rx.data() + 4);
+            
+            RCLCPP_INFO(this->get_logger(), "F: Cnt:%.0f T:%.1f A:[%.2f %.2f %.2f] G:[%.2f %.2f %.2f]",
+                        payload[0], payload[1],
+                        payload[2], payload[3], payload[4],
+                        payload[5], payload[6], payload[7]);
+                        
             std_msgs::msg::Float32MultiArray msg;
-            float floats[PAYLOAD_FLOATS];
-            memcpy(floats, &rx[4], PAYLOAD_BYTES);
-            for(int i=0; i<PAYLOAD_FLOATS; i++) msg.data.push_back(floats[i]);
+            // Copy floats from payload to msg.data
+            msg.data.assign(payload, payload + PAYLOAD_FLOATS);
             imu_pub_->publish(msg);
         } else {
              static int err_cnt = 0;
