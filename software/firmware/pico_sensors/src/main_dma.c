@@ -67,10 +67,16 @@ static volatile uint8_t tx_idx = 0;
 void cs_loopback_callback(uint gpio, uint32_t events) {
     if (gpio == PIN_CS_LOOPBACK && (events & GPIO_IRQ_EDGE_FALL)) {
         // CS went LOW - transaction starting!
-        // Pre-fill TX FIFO immediately with first 8 bytes
-        for (int i = 0; i < 8 && spi_is_writable(SPI_SLAVE_PORT); i++) {
-            spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[i];
-        }
+        // Immediately write first 8 bytes to TX FIFO (FIFO depth is 8)
+        // Write directly without checking - we want maximum speed
+        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[0];
+        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[1];
+        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[2];
+        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[3];
+        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[4];
+        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[5];
+        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[6];
+        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[7];
         // Set index to 8 - main loop continues from here
         tx_idx = 8;
     }
