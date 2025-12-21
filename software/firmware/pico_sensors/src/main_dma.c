@@ -67,8 +67,12 @@ static volatile uint8_t tx_idx = 0;
 void cs_loopback_callback(uint gpio, uint32_t events) {
     if (gpio == PIN_CS_LOOPBACK && (events & GPIO_IRQ_EDGE_FALL)) {
         // CS went LOW - transaction starting!
-        // Just reset index - main loop will fill FIFO from position 0
-        tx_idx = 0;
+        // Pre-fill TX FIFO immediately with first 8 bytes
+        for (int i = 0; i < 8 && spi_is_writable(SPI_SLAVE_PORT); i++) {
+            spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[i];
+        }
+        // Set index to 8 - main loop continues from here
+        tx_idx = 8;
     }
 }
 
