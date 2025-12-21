@@ -64,6 +64,7 @@ static int dma_tx;
 static volatile uint8_t tx_idx = 0;
 
 // CS loopback IRQ handler - fires on FALLING edge (Transaction Start)
+// CS loopback IRQ handler - fires on FALLING edge (Transaction Start)
 void cs_loopback_callback(uint gpio, uint32_t events) {
     if (gpio == PIN_CS_LOOPBACK && (events & GPIO_IRQ_EDGE_FALL)) {
         // CS went LOW - transaction starting!
@@ -71,27 +72,26 @@ void cs_loopback_callback(uint gpio, uint32_t events) {
         // Debug: Toggle LED
         gpio_xor_mask(1u << PIN_LED);
         
-        // Disable SPI to flush FIFOs
+        // 1. Disable to Flush
         spi_get_hw(SPI_SLAVE_PORT)->cr1 &= ~SPI_SSPCR1_SSE_BITS;
         
-        // Pre-fill TX FIFO
-        // Write 2 Dummy bytes to counter potential "swallowing" during enable
-        // We write DIRECTLY to DR while disabled.
-        spi_get_hw(SPI_SLAVE_PORT)->dr = 0x00;
-        spi_get_hw(SPI_SLAVE_PORT)->dr = 0x00;
-        
-        // Write actual header/data (up to FIFO depth of 8)
-        // We wrote 2 dummies, so we can write 6 real bytes (Total 8)
-        // TX Buffer: [AA, BB, CC, DD, ...] - index 0..5
-        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[0];
-        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[1];
-        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[2];
-        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[3];
-        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[4];
-        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[5];
-        
-        // Re-enable SPI now that FIFO is primed
+        // 2. Re-Enable immediately (Fresh, empty FIFO)
         spi_get_hw(SPI_SLAVE_PORT)->cr1 |= SPI_SSPCR1_SSE_BITS;
+        
+        // 3. Pre-fill TX FIFO
+        // Write 2 Dummy bytes first (sacrificial)
+        while (!spi_is_writable(SPI_SLAVE_PORT)); 
+        spi_get_hw(SPI_SLAVE_PORT)->dr = 0x00;
+        
+        while (!spi_is_writable(SPI_SLAVE_PORT)); 
+        spi_get_hw(SPI_SLAVE_PORT)->dr = 0x00;
+        
+        // Write Header/Data (6 bytes to fill remaining depth of 8)
+        // tx_buffer[0..5]
+        for (int i = 0; i < 6; i++) {
+            while (!spi_is_writable(SPI_SLAVE_PORT)); 
+            spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[i];
+        }
         
         // Set index to 6 - main loop continues from here
         tx_idx = 6;
