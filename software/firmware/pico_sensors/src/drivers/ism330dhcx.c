@@ -66,20 +66,11 @@ bool ism330_init(spi_inst_t *spi, uint cs_pin) {
     return true;
 }
 
+// 0x22 = OUTX_L_G (Gyro X Low)
+// Order from 0x22 is: GX_L, GX_H, GY_L, GY_H, GZ_L, GZ_H, AX_L, AX_H, AY_L, AY_H, AZ_L, AZ_H
+#define REG_OUT_START 0x22
+
 void ism330_read_data(spi_inst_t *spi, uint cs_pin, ism330_data_t *data) {
-    // Read 14 bytes: Temp(2) + Gyro(6) + Accel(6) from 0x20-0x2D
-    uint8_t buf[14];
-    ism330_read_burst(spi, cs_pin, ISM330_OUT_TEMP_L, buf, 14);
-    
-    // Temperature (offset 0-1)
-    int16_t temp_raw = (int16_t)(buf[1] << 8 | buf[0]);
-    data->temp = 25.0f + (float)temp_raw / 256.0f;
-    
-    // Gyroscope (offset 2-7): X, Y, Z
-    int16_t gx = (int16_t)(buf[3] << 8 | buf[2]);
-    int16_t gy = (int16_t)(buf[5] << 8 | buf[4]);
-    int16_t gz = (int16_t)(buf[7] << 8 | buf[6]);
-    
     data->gyro[0] = (float)gx * ISM330_SENS_2000DPS;
     data->gyro[1] = (float)gy * ISM330_SENS_2000DPS;
     data->gyro[2] = (float)gz * ISM330_SENS_2000DPS;
@@ -99,3 +90,4 @@ bool ism330_data_ready(spi_inst_t *spi, uint cs_pin) {
     // Bit 0 = XLDA (Accel ready), Bit 1 = GDA (Gyro ready)
     return (status & 0x03) == 0x03;
 }
+```

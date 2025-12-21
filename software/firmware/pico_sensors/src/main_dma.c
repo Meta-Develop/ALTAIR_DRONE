@@ -223,25 +223,24 @@ int main() {
         if (new_data_ready) {
             new_data_ready = false;
             
-            // --- TEST PATTERN GENERATOR ---
-            // Replaces sensor data with verifiable counters
+            // Pack data into buffer (DMA will send this)
+            // Header is at 0-3. Floats start at 4.
+            float *floats = (float*)(tx_buffer + 4); 
             
-            // 1. Header (Already Fixed at 0-3: AA BB CC DD)
+            // Float 0: Counter (for integrity check)
+            floats[0] = (float)sample_count;
+            // Float 1: Temp (Placeholder)
+            floats[1] = sensor_data.temp;
             
-            // 2. Frame Counter (Bytes 4-7)
-            // Allows RPi4 to detect dropped packets
-            uint32_t *counter_ptr = (uint32_t*)(tx_buffer + 4);
-            *counter_ptr = sample_count;
+            // Accel (floats 2-4)
+            floats[2] = sensor_data.accel[0];
+            floats[3] = sensor_data.accel[1];
+            floats[4] = sensor_data.accel[2];
             
-            // 3. Inverted Counter (Bytes 8-11)
-            // Bit integrity check
-            uint32_t *inv_counter_ptr = (uint32_t*)(tx_buffer + 8);
-            *inv_counter_ptr = ~sample_count;
-            
-            // 4. Fill remainder with rolling pattern
-            for (int i = 12; i < TOTAL_SIZE; i++) {
-                tx_buffer[i] = (uint8_t)(i + sample_count);
-            }
+            // Gyro (floats 5-7)
+            floats[5] = sensor_data.gyro[0];
+            floats[6] = sensor_data.gyro[1];
+            floats[7] = sensor_data.gyro[2];
             
             // Signal RPi4 that data is ready (Rising Edge)
             gpio_put(PIN_DATA_READY, 1);

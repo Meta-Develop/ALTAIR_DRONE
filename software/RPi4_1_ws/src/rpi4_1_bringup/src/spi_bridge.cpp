@@ -194,7 +194,7 @@ private:
          tr.tx_buf = (unsigned long)tx.data();
          tr.rx_buf = (unsigned long)rx.data();
          tr.len = rx.size();
-         // Lower speed to 1MHz to prevent slave underrun/FIFO sync issues
+         // Restore speed to 1MHz (Target)
          tr.speed_hz = 1000000; 
          tr.bits_per_word = 8;
          
