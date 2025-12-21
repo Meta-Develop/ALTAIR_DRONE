@@ -37,6 +37,7 @@
 
 // --- Handshake & Status ---
 #define PIN_DATA_READY 20  // Pin 26 -> RPi GPIO 6 (Pin 31)
+#define PIN_CS_LOOPBACK 21 // Pin 27 <- Jumper from Pin 22 (GP17 CS) for edge detection
 #define PIN_LED 25
 
 // --- Payload ---
@@ -58,7 +59,24 @@ static volatile uint32_t sample_count = 0;
 
 // DMA channels
 static int dma_tx;
-static int dma_ctrl;  // Control channel for automatic restart
+
+// CS loopback IRQ handler - fires on falling edge (transaction start)
+void cs_loopback_callback(uint gpio, uint32_t events) {
+    if (gpio == PIN_CS_LOOPBACK && (events & GPIO_IRQ_EDGE_FALL)) {
+        // CS went LOW - transaction starting!
+        // Immediately abort any pending DMA and restart from buffer start
+        dma_channel_abort(dma_tx);
+        
+        // Pre-fill TX FIFO with as much data as possible (FIFO is 8 bytes)
+        for (int i = 0; i < 8 && spi_is_writable(SPI_SLAVE_PORT); i++) {
+            spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[i];
+        }
+        
+        // Restart DMA from byte 8 onwards
+        dma_channel_set_read_addr(dma_tx, tx_buffer + 8, false);
+        dma_channel_set_trans_count(dma_tx, TOTAL_SIZE - 8, true);
+    }
+}
 
 // Timer callback - runs at 1000Hz
 bool timer_1khz_callback(struct repeating_timer *t) {
@@ -74,13 +92,10 @@ bool timer_1khz_callback(struct repeating_timer *t) {
     return true;  // Keep repeating
 }
 
-// DMA TX completion handler - restarts DMA for next transaction
+// DMA TX completion handler - does nothing, CS loopback ISR handles restart
 void dma_handler() {
     // Clear interrupt
     dma_hw->ints0 = 1u << dma_tx;
-    
-    // Restart DMA from beginning of buffer
-    dma_channel_set_read_addr(dma_tx, tx_buffer, true);
 }
 
 int main() {
@@ -151,8 +166,17 @@ int main() {
     irq_set_exclusive_handler(DMA_IRQ_0, dma_handler);
     irq_set_enabled(DMA_IRQ_0, true);
     
-    // Start DMA
-    dma_channel_start(dma_tx);
+    // === CS Loopback GPIO for Edge Detection ===
+    // GP21 (Pin 27) is jumpered to GP17 (Pin 22) - CS signal
+    gpio_init(PIN_CS_LOOPBACK);
+    gpio_set_dir(PIN_CS_LOOPBACK, GPIO_IN);
+    gpio_pull_up(PIN_CS_LOOPBACK);
+    
+    // Enable falling edge IRQ for CS detection
+    gpio_set_irq_enabled_with_callback(PIN_CS_LOOPBACK, GPIO_IRQ_EDGE_FALL, true, &cs_loopback_callback);
+    printf("[MAIN] CS loopback detection enabled on GP21.\n");
+    
+    // Don't start DMA here - CS loopback ISR will handle it
     printf("[MAIN] DMA-based SPI slave TX initialized.\n");
 
     // === Start 1000Hz Timer ===
