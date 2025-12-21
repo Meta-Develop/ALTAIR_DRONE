@@ -63,6 +63,9 @@ static int dma_tx;
 // TX buffer index - volatile for ISR access
 static volatile uint8_t tx_idx = 0;
 
+// Debug counter
+static volatile uint8_t isr_cnt = 0;
+
 // CS loopback IRQ handler - fires on RISING edge (Transaction Complete)
 void cs_loopback_callback(uint gpio, uint32_t events) {
     if (gpio == PIN_CS_LOOPBACK && (events & GPIO_IRQ_EDGE_RISE)) {
@@ -71,6 +74,10 @@ void cs_loopback_callback(uint gpio, uint32_t events) {
         
         // Debug: Toggle LED
         gpio_xor_mask(1u << PIN_LED);
+        
+        // Update ISR count in buffer (Byte 4)
+        isr_cnt++;
+        tx_buffer[4] = isr_cnt;
         
         // Disable SPI to flush FIFOs (Safe now as CS is High)
         spi_get_hw(SPI_SLAVE_PORT)->cr1 &= ~SPI_SSPCR1_SSE_BITS;
@@ -182,65 +189,70 @@ int main() {
     // GP21 (Pin 27) is jumpered to GP17 (Pin 22) - CS signal
     gpio_init(PIN_CS_LOOPBACK);
     gpio_set_dir(PIN_CS_LOOPBACK, GPIO_IN);
-    gpio_pull_up(PIN_CS_LOOPBACK);
-    
     // Initial Pre-fill for first transaction
-    // Ensure SPI is ready/writable before filling
-    for (int i = 0; i < 8; i++) {
-        while (!spi_is_writable(SPI_SLAVE_PORT)); 
-        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[i];
-    }
-    tx_idx = 8;
-
-    // Enable Rising Edge IRQ for CS detection (End of Transaction)
-    // We refill the FIFO when CS goes HIGH so we are ready for the NEXT transaction
-    gpio_set_irq_enabled_with_callback(PIN_CS_LOOPBACK, GPIO_IRQ_EDGE_RISE, true, &cs_loopback_callback);
-    printf("[MAIN] CS loopback detection enabled on GP21 (Rising Edge).\n");
+    // Debug: Store SR values in buffer to diagnose FIFO behavior
     
-    // Don't start DMA here - CS loopback ISR will handle it
-    printf("[MAIN] DMA-based SPI slave TX initialized.\n");
+    // Read SR before writing: Check TFE (bit 0) and TNF (bit 1)
+    // TFE=1 (Empty), TNF=1 (Not Full) -> SR should be 0x3 (or similar)
+    uint32_t sr_before = spi_get_hw(SPI_SLAVE_PORT)->sr;
+    tx_buffer[0] = (uint8_t)sr_before; 
+    
+    // Write 1 byte (0xAA)
+    while (!spi_is_writable(SPI_SLAVE_PORT)); 
+    spi_get_hw(SPI_SLAVE_PORT)->dr = 0xAA;
+    
+    // Read SR after 1 byte
+    uint32_t sr_mid = spi_get_hw(SPI_SLAVE_PORT)->sr;
+    tx_buffer[1] = (uint8_t)sr_mid;
+    
+    // Write remaining 7 bytes
+    for (int i = 0; i < 7; i++) {
+        while (!spi_is_writable(SPI_SLAVE_PORT)); 
+        spi_get_hw(SPI_SLAVE_PORT)->dr = 0xBB + i;
+    }
+    
+    // Read SR after 8 bytes
+    // Should be Full? TNF=0? TFE=0?
+    uint32_t sr_after = spi_get_hw(SPI_SLAVE_PORT)->sr;
+    tx_buffer[2] = (uint8_t)sr_after;
+    
+    // Byte 3: Dummy/Padding
+    tx_buffer[3] = 0xCC;
+    
+    // ISR Count (at offset 4)
+    tx_buffer[4] = 0; // Will be incremented by ISR
+
+    tx_idx = 8; // Main loop continues
+
+    // Enable Rising Edge IRQ
+    gpio_set_irq_enabled_with_callback(PIN_CS_LOOPBACK, GPIO_IRQ_EDGE_RISE, true, &cs_loopback_callback);
+    printf("[MAIN] CS Rising Edge IRQ Enabled.\n");
+    
+    // Don't start DMA here - usage of DMA is mixed/suspended for this debug
+    printf("[MAIN] Debug Mode: SPI status reporting.\n");
 
     // === Start 1000Hz Timer ===
     struct repeating_timer timer;
     add_repeating_timer_us(-1000, timer_1khz_callback, NULL, &timer);
-    printf("[MAIN] 1000Hz timer started.\n");
 
     uint32_t last_heartbeat = 0;
-    uint32_t last_sample_count = 0;
-    uint32_t last_rate_check = 0;
 
     while (true) {
-        // Toggle LED based on CS state for debug
-        // gpio_put(PIN_LED, !gpio_get(PIN_CS_LOOPBACK)); // Debug CS state logic
-
-        // Update buffer when new sensor data is available
-        if (new_data_ready) {
-            new_data_ready = false;
-            
-            // Pack data into buffer (DMA will send this)
-            float *floats = (float*)(tx_buffer + 4);
-            
-            floats[0] = (float)sample_count;
-            floats[1] = sensor_data.temp;
-            
-            // Accel (floats 2-4)
-            floats[2] = sensor_data.accel[0];
-            floats[3] = sensor_data.accel[1];
-            floats[4] = sensor_data.accel[2];
-            
-            // Gyro (floats 5-7)
-            floats[5] = sensor_data.gyro[0];
-            floats[6] = sensor_data.gyro[1];
-            floats[7] = sensor_data.gyro[2];
+        // Toggle LED based on CS state? No, heartbeat is better.
+        // Update ISR count in buffer for visibility
+        // Note: ISR will overwrite Byte 4 on next refill?
+        // Wait, ISR refills 0-7. 
+        // We need ISR to ALSO write debug info.
+        
+        // ... (standard main loop checks) ...
+        
+        // Heartbeat LED
+        uint32_t now = time_us_32();
+        if (now - last_heartbeat > 500000) {
+            gpio_put(PIN_LED, !gpio_get(PIN_LED));
+            last_heartbeat = now;
         }
-
-        // === Continuously keep TX FIFO filled ===
-        // ISR resets tx_idx to 0 on CS falling edge
-        // Main loop fills FIFO from current index position
-        while (spi_is_writable(SPI_SLAVE_PORT) && tx_idx < TOTAL_SIZE) {
-            spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[tx_idx];
-            tx_idx++;
-        }
+    }
 
         // Drain RX FIFO (we don't need master's data)
         while (spi_is_readable(SPI_SLAVE_PORT)) {
