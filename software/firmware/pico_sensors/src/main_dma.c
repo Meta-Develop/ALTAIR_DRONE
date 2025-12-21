@@ -68,11 +68,10 @@ void cs_loopback_callback(uint gpio, uint32_t events) {
     if (gpio == PIN_CS_LOOPBACK && (events & GPIO_IRQ_EDGE_FALL)) {
         // CS went LOW - transaction starting!
         
-        // Disable SPI to flush FIFOs, then re-enable
-        spi_get_hw(SPI_SLAVE_PORT)->cr1 &= ~SPI_SSPCR1_SSE_BITS;  // Disable
-        spi_get_hw(SPI_SLAVE_PORT)->cr1 |= SPI_SSPCR1_SSE_BITS;   // Re-enable
+        // Disable SPI to flush FIFOs
+        spi_get_hw(SPI_SLAVE_PORT)->cr1 &= ~SPI_SSPCR1_SSE_BITS;
         
-        // Now pre-fill TX FIFO with first 8 bytes (clean slate)
+        // Pre-fill TX FIFO while SPI is disabled (FIFO is cleared)
         spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[0];
         spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[1];
         spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[2];
@@ -81,6 +80,9 @@ void cs_loopback_callback(uint gpio, uint32_t events) {
         spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[5];
         spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[6];
         spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[7];
+        
+        // Now re-enable SPI with fresh data ready
+        spi_get_hw(SPI_SLAVE_PORT)->cr1 |= SPI_SSPCR1_SSE_BITS;
         
         // Set index to 8 - main loop continues from here
         tx_idx = 8;
