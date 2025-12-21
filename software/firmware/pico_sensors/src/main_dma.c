@@ -217,8 +217,17 @@ int main() {
     printf("[MAIN] PIO SPI Slave Ready (DMA Ring Mode).\n");
     printf("[MAIN] TX Buffer Address: %p (Aligned check: %s)\n", (void*)tx_buffer, ((uintptr_t)tx_buffer % 32 == 0) ? "OK" : "FAIL");
 
-    // --- Pre-fill Header ---
-    tx_buffer[0] = 0xAA; tx_buffer[1] = 0xBB; tx_buffer[2] = 0xCC; tx_buffer[3] = 0xDD;
+    // --- STATIC TEST PATTERN: Fill entire buffer at startup ---
+    // Header: AA BB CC DD
+    tx_buffer[0] = 0xAA; 
+    tx_buffer[1] = 0xBB; 
+    tx_buffer[2] = 0xCC; 
+    tx_buffer[3] = 0xDD;
+    // Payload: Sequential bytes 01 02 03 04... (easy to verify)
+    for (int i = 4; i < TOTAL_SIZE; i++) {
+        tx_buffer[i] = (uint8_t)(i - 3);  // 01, 02, 03...
+    }
+    printf("[MAIN] TX Buffer filled with static test pattern (AA BB CC DD + 01 02 03...)\\n");
     
     // --- GPIO IRQ Setup on CS (GP17) ---
     gpio_set_irq_enabled_with_callback(PIN_CS, GPIO_IRQ_EDGE_FALL, true, &cs_irq_handler);
