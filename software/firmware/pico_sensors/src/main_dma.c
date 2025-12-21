@@ -77,14 +77,10 @@ void cs_loopback_callback(uint gpio, uint32_t events) {
         
         // Pre-fill TX FIFO with next 8 bytes
         // No dummy byte needed if reset works properly when CS is High
-        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[0];
-        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[1];
-        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[2];
-        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[3];
-        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[4];
-        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[5];
-        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[6];
-        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[7];
+        for (int i = 0; i < 8; i++) {
+            while (!spi_is_writable(SPI_SLAVE_PORT)); 
+            spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[i];
+        }
         
         // Re-enable SPI
         spi_get_hw(SPI_SLAVE_PORT)->cr1 |= SPI_SSPCR1_SSE_BITS;
@@ -189,15 +185,11 @@ int main() {
     gpio_pull_up(PIN_CS_LOOPBACK);
     
     // Initial Pre-fill for first transaction
-    // This ensures data is ready before the first CS falling edge
-    spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[0];
-    spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[1];
-    spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[2];
-    spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[3];
-    spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[4];
-    spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[5];
-    spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[6];
-    spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[7];
+    // Ensure SPI is ready/writable before filling
+    for (int i = 0; i < 8; i++) {
+        while (!spi_is_writable(SPI_SLAVE_PORT)); 
+        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[i];
+    }
     tx_idx = 8;
 
     // Enable Rising Edge IRQ for CS detection (End of Transaction)
@@ -218,6 +210,9 @@ int main() {
     uint32_t last_rate_check = 0;
 
     while (true) {
+        // Toggle LED based on CS state for debug
+        // gpio_put(PIN_LED, !gpio_get(PIN_CS_LOOPBACK)); // Debug CS state logic
+
         // Update buffer when new sensor data is available
         if (new_data_ready) {
             new_data_ready = false;
