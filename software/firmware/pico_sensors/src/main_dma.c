@@ -236,6 +236,8 @@ int main() {
     add_repeating_timer_us(-1000, timer_1khz_callback, NULL, &timer);
 
     uint32_t last_heartbeat = 0;
+    uint32_t last_sample_count = 0;
+    uint32_t last_rate_check = 0;
 
     while (true) {
         // Toggle LED based on CS state? No, heartbeat is better.
