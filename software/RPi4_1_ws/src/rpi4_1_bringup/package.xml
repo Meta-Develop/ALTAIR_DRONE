@@ -9,10 +9,8 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <exec_depend>actuator_bridge</exec_depend>
-  <exec_depend>sensor_processing</exec_depend>
-  <exec_depend>robot_localization</exec_depend>
-  <exec_depend>micro_ros_agent</exec_depend>
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
 
   <export>
     <build_type>ament_cmake</build_type>

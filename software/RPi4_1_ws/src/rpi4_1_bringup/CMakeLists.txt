@@ -6,9 +6,25 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(std_msgs REQUIRED)
+
+add_executable(spi_bridge_cpp src/spi_bridge.cpp)
+ament_target_dependencies(spi_bridge_cpp rclcpp std_msgs)
+
+install(TARGETS
+  spi_bridge_cpp
+  DESTINATION lib/${PROJECT_NAME}
+)
 
 install(DIRECTORY launch config
   DESTINATION share/${PROJECT_NAME}
+)
+
+install(PROGRAMS
+  scripts/spi_bridge.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME spi_bridge_py
 )
 
 ament_package()
