@@ -142,6 +142,9 @@ int main() {
     
     // TX FIFO index for continuous loading
     volatile uint8_t tx_idx = 0;
+    
+    // CS state tracking for sync
+    bool last_cs_state = gpio_get(PIN_SLAVE_CS);
 
     while (true) {
         // Update buffer when new sensor data is available
@@ -165,8 +168,24 @@ int main() {
             floats[7] = sensor_data.gyro[2];
         }
 
+        // === CS-based synchronization ===
+        // When CS goes HIGH (end of transaction), flush FIFO and reset index
+        bool current_cs = gpio_get(PIN_SLAVE_CS);
+        if (current_cs && !last_cs_state) {
+            // CS rising edge: transaction ended
+            // Flush TX FIFO by reading until empty
+            while (spi_is_readable(SPI_SLAVE_PORT)) {
+                volatile uint8_t dummy = spi_get_hw(SPI_SLAVE_PORT)->dr;
+                (void)dummy;
+            }
+            // Reset TX index and prime FIFO with start of buffer
+            tx_idx = 0;
+            // Clear any residual TX FIFO data (there's no direct flush, but we can drain by writing zeros)
+            // Actually, we just reset our index - next fill will start from 0
+        }
+        last_cs_state = current_cs;
+
         // === Continuously keep TX FIFO filled ===
-        // This ensures data is always available when master clocks
         while (spi_is_writable(SPI_SLAVE_PORT)) {
             spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[tx_idx];
             tx_idx = (tx_idx + 1) % (PAYLOAD_SIZE + 4);
