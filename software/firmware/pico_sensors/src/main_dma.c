@@ -65,26 +65,26 @@ PIO pio = pio0;
 uint sm = 0;
 
 // CS Edge Callback - Resync DMA
-void cs_loopback_callback(uint gpio, uint32_t events) {
-    if (gpio == PIN_CS_LOOPBACK && (events & GPIO_IRQ_EDGE_FALL)) {
-        // Transaction Start (CS Low)
-        gpio_xor_mask(1u << PIN_LED); // Toggle LED
-        gpio_put(PIN_DATA_READY, 0);  // Clear Data Ready signal
+// PIO IRQ Handler (Replaces CS Loopback)
+void pio_irq_handler() {
+    // Check if it's our SM causing IRQ
+    if (pio0_hw->irq & 1) {
+        pio0_hw->irq = 1; // Clear IRQ 0
         
-        // 1. Abort current DMA (if any) to reset pointer
+        // Transaction Start (CS Low detected by PIO)
+        
+        // 1. Abort current DMA to reset pointer
         dma_channel_abort(dma_tx);
         
-        // 2. Clear PIO FIFOs (Optional, ensures fresh start)
-        pio_sm_clear_fifos(pio, sm);
+        // 2. Clear FIFOs if needed (optional)
+        // pio_sm_clear_fifos(pio, sm);
         
         // 3. Restart DMA: Reset Count AND Address
         dma_channel_set_trans_count(dma_tx, TOTAL_SIZE, false);
-        dma_channel_set_read_addr(dma_tx, tx_buffer, true); // Trigger check
+        dma_channel_set_read_addr(dma_tx, tx_buffer, true);
         
-        // Restart PIO SM? Not strictly needed if it waits for CS.
-        // But helpful to clear any stuck state.
-        pio_sm_restart(pio, sm);
-        pio_sm_exec(pio, sm, pio_encode_jmp(0)); // Jump to start (wait for CS)
+        // Clear Data Ready (Handshake)
+        gpio_put(PIN_DATA_READY, 0); 
     }
 }
 
@@ -170,11 +170,21 @@ int main() {
     // If Slave stalls, MISO holds last bit?
     // That's acceptable for overflow.
     
-    // Enable CS Loopback IRQ
-    gpio_set_irq_enabled_with_callback(PIN_CS_LOOPBACK, GPIO_IRQ_EDGE_FALL, true, &cs_loopback_callback);
-    printf("[MAIN] CS Falling Edge IRQ Enabled.\n");
+    // --- PIO IRQ Setup ---
+    // Enable PIO IRQ 0 for this SM
+    // 'irq 0' in PIO program maps to bit 0 of irq flags
+    pio_set_irq0_source_enabled(pio, pis_interrupt0, true);
+    irq_set_exclusive_handler(PIO0_IRQ_0, pio_irq_handler);
+    irq_set_enabled(PIO0_IRQ_0, true);
+
+    // --- Pre-fill Header Manual ---
+    // Seed with AA BB CC DD to debug connection
+    tx_buffer[0] = 0xAA; tx_buffer[1] = 0xBB; tx_buffer[2] = 0xCC; tx_buffer[3] = 0xDD;
     
-    printf("[MAIN] PIO SPI Slave Ready.\n");
+    // Start DMA immediately to fill FIFO
+    dma_channel_start(dma_tx);
+    
+    printf("[MAIN] PIO SPI Slave Ready (IRQ Mode).\n");
 
     // === Start 1000Hz Timer ===
     struct repeating_timer timer;

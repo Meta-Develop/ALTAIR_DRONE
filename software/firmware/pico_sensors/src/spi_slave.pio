@@ -17,7 +17,10 @@
 .wrap_target
     ; 1. Wait for CS (GP17) to go Low
     wait 0 gpio 17
-
+    
+    ; Signal IRQ for DMA re-arm (Replaces physical loopback)
+    irq 0
+    
     ; 2. Prepare first bit of data (CPHA=0 means data valid before first clock edge)
     ; Pull data from TX FIFO to OSR. 'block' means wait if empty.
     pull block      

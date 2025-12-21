@@ -27,3 +27,11 @@ echo rising > /sys/class/gpio/gpio6/edge
 chmod 666 /sys/class/gpio/gpio6/value
 chmod 666 /sys/class/gpio/gpio6/edge
 echo "GPIO 6 Configured"
+
+# GPIO 9 (Pin 21) - MISO Monitor
+if [ ! -d /sys/class/gpio/gpio9 ]; then
+    echo 9 > /sys/class/gpio/export
+fi
+echo in > /sys/class/gpio/gpio9/direction
+chmod 666 /sys/class/gpio/gpio9/value
+echo "GPIO 9 Configured"
