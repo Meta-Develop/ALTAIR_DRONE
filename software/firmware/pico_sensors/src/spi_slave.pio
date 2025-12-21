@@ -21,14 +21,12 @@
     ; Signal IRQ for DMA re-arm (Replaces physical loopback)
     irq 0
     
-    ; 2. Prepare first bit of data (CPHA=0 means data valid before first clock edge)
-    ; Pull data from TX FIFO to OSR. 'block' means wait if empty.
-    pull block      
+    ; TEST: Hardcode OSR to All Ones (0xFFFFFFFF)
+    ; This ignores TX FIFO and sends 1s.
+    mov osr, ~null      
     
-    ; ALIGNMENT FIX: DMA writes 8 bits [00 00 00 AA]. 
-    ; Shift Left (MSB First) outputs bits 31..24 first (Zeros).
-    ; We must discard top 24 bits to reach the data at LSB.
-    out null, 24
+    ; ALIGNMENT FIX REMOVED (Not needed for all 1s)
+    ; out null, 24
 
     ; Shift MSB (Bit 7) to MISO (GP19)
     out pins, 1
