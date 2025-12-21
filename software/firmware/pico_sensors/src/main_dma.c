@@ -68,42 +68,42 @@ uint offset = 0; // Make global for ISR
 
 // CS Edge Callback - Resync DMA
 // CS (GP17) Falling Edge Handler
+// Alarm callback to re-arm IRQ after transaction
+int64_t rearm_irq_callback(alarm_id_t id, void *user_data) {
+    // Clear any pending interrupts on CS caused by noise/bounce
+    gpio_acknowledge_irq(PIN_CS, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE);
+    
+    // Re-enable Falling Edge IRQ
+    gpio_set_irq_enabled(PIN_CS, GPIO_IRQ_EDGE_FALL, true);
+    return 0; // Don't repeat
+}
+
 // CS Edge Callback - Resync DMA
 // CS (GP17) Falling Edge Handler
 void cs_irq_handler(uint gpio, uint32_t events) {
-    if (gpio == PIN_CS) {
-        if (events & GPIO_IRQ_EDGE_FALL) {
-            // --- Start of Transaction ---
-            
-            // 1. Disable Fall IRQ, Enable Rise IRQ (Prevent re-triggering)
-            gpio_set_irq_enabled(PIN_CS, GPIO_IRQ_EDGE_FALL, false);
-            gpio_set_irq_enabled(PIN_CS, GPIO_IRQ_EDGE_RISE, true);
-
-            // Debug: Toggle LED
-            gpio_xor_mask(1u << PIN_LED);
-            
-            // 2. Restart Logic
-            dma_channel_abort(dma_tx);
-            pio_sm_restart(pio, sm);
-            pio_sm_clear_fifos(pio, sm);
-            pio_sm_exec(pio, sm, pio_encode_jmp(offset));
-            
-            dma_channel_set_trans_count(dma_tx, TOTAL_SIZE, false);
-            dma_channel_set_read_addr(dma_tx, tx_buffer, true);
-            
-            // Handshake
-            gpio_put(PIN_DATA_READY, 0); 
-        } 
-        else if (events & GPIO_IRQ_EDGE_RISE) {
-            // --- End of Transaction ---
-            
-            // 1. Disable Rise IRQ, Enable Fall IRQ
-            gpio_set_irq_enabled(PIN_CS, GPIO_IRQ_EDGE_RISE, false);
-            gpio_set_irq_enabled(PIN_CS, GPIO_IRQ_EDGE_FALL, true);
-            
-            // Optional: Abort DMA to stop filling FIFO? 
-            // For now, just reset IRQ state.
-        }
+    if (gpio == PIN_CS && (events & GPIO_IRQ_EDGE_FALL)) {
+        // --- Start of Transaction ---
+        
+        // 1. Disable IRQ IMMEDIATELY to prevent crosstalk resets
+        gpio_set_irq_enabled(PIN_CS, GPIO_IRQ_EDGE_FALL, false);
+        
+        // Debug: Toggle LED
+        gpio_xor_mask(1u << PIN_LED);
+        
+        // 2. Restart Logic
+        dma_channel_abort(dma_tx);
+        pio_sm_restart(pio, sm);
+        pio_sm_clear_fifos(pio, sm);
+        pio_sm_exec(pio, sm, pio_encode_jmp(offset));
+        
+        dma_channel_set_trans_count(dma_tx, TOTAL_SIZE, false);
+        dma_channel_set_read_addr(dma_tx, tx_buffer, true);
+        
+        // Handshake
+        gpio_put(PIN_DATA_READY, 0); 
+        
+        // 3. Schedule Re-arm in 3ms (Transfer takes ~1ms @ 1MHz)
+        add_alarm_in_ms(3, rearm_irq_callback, NULL, false);
     }
 }
 
