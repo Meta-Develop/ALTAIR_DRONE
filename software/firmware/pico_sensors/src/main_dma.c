@@ -254,7 +254,6 @@ int main() {
             gpio_put(PIN_LED, !gpio_get(PIN_LED));
             last_heartbeat = now;
         }
-    }
 
         // Drain RX FIFO (we don't need master's data)
         while (spi_is_readable(SPI_SLAVE_PORT)) {
