@@ -63,26 +63,20 @@ static int dma_tx;
 // TX buffer index - volatile for ISR access
 static volatile uint8_t tx_idx = 0;
 
-// CS loopback IRQ handler - fires on falling edge (transaction start)
+// CS loopback IRQ handler - fires on RISING edge (Transaction Complete)
 void cs_loopback_callback(uint gpio, uint32_t events) {
-    if (gpio == PIN_CS_LOOPBACK && (events & GPIO_IRQ_EDGE_FALL)) {
-        // CS went LOW - transaction starting!
+    if (gpio == PIN_CS_LOOPBACK && (events & GPIO_IRQ_EDGE_RISE)) {
+        // CS went HIGH - transaction finished!
+        // Prepare data for the NEXT transaction
         
-        // Disable SPI to flush FIFOs
+        // Debug: Toggle LED
+        gpio_xor_mask(1u << PIN_LED);
+        
+        // Disable SPI to flush FIFOs (Safe now as CS is High)
         spi_get_hw(SPI_SLAVE_PORT)->cr1 &= ~SPI_SSPCR1_SSE_BITS;
         
-        // Debug: Toggle LED to confirm ISR is firing
-        gpio_xor_mask(1u << PIN_LED);
-
-        // Pre-fill TX FIFO while SPI is disabled (FIFO is cleared)
-        // WARN: The first byte written seems to be swallowed or lost upon enable
-        // So we write a dummy byte first
-        spi_get_hw(SPI_SLAVE_PORT)->dr = 0x00; // Dummy
-        
-        // Then the actual 7 bytes (FIFO depth is 8, 1 used by dummy)
-        // Wait, if depth is 8, we can write 8 items. 
-        // If first is lost, we write 0, then 0..6?
-        // Let's try writing Dummy + 0..6
+        // Pre-fill TX FIFO with next 8 bytes
+        // No dummy byte needed if reset works properly when CS is High
         spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[0];
         spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[1];
         spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[2];
@@ -90,12 +84,13 @@ void cs_loopback_callback(uint gpio, uint32_t events) {
         spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[4];
         spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[5];
         spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[6];
+        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[7];
         
-        // Now re-enable SPI with fresh data ready
+        // Re-enable SPI
         spi_get_hw(SPI_SLAVE_PORT)->cr1 |= SPI_SSPCR1_SSE_BITS;
         
-        // Set index to 7 - main loop continues from here
-        tx_idx = 7;
+        // Set index to 8 - main loop keeps the rest filled
+        tx_idx = 8;
     }
 }
 
@@ -193,9 +188,22 @@ int main() {
     gpio_set_dir(PIN_CS_LOOPBACK, GPIO_IN);
     gpio_pull_up(PIN_CS_LOOPBACK);
     
-    // Enable falling edge IRQ for CS detection
-    gpio_set_irq_enabled_with_callback(PIN_CS_LOOPBACK, GPIO_IRQ_EDGE_FALL, true, &cs_loopback_callback);
-    printf("[MAIN] CS loopback detection enabled on GP21.\n");
+    // Initial Pre-fill for first transaction
+    // This ensures data is ready before the first CS falling edge
+    spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[0];
+    spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[1];
+    spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[2];
+    spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[3];
+    spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[4];
+    spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[5];
+    spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[6];
+    spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[7];
+    tx_idx = 8;
+
+    // Enable Rising Edge IRQ for CS detection (End of Transaction)
+    // We refill the FIFO when CS goes HIGH so we are ready for the NEXT transaction
+    gpio_set_irq_enabled_with_callback(PIN_CS_LOOPBACK, GPIO_IRQ_EDGE_RISE, true, &cs_loopback_callback);
+    printf("[MAIN] CS loopback detection enabled on GP21 (Rising Edge).\n");
     
     // Don't start DMA here - CS loopback ISR will handle it
     printf("[MAIN] DMA-based SPI slave TX initialized.\n");
