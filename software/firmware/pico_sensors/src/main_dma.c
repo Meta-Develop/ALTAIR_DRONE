@@ -71,6 +71,9 @@ void pio_irq_handler() {
     if (pio0_hw->irq & 1) {
         pio0_hw->irq = 1; // Clear IRQ 0
         
+        // Debug: Toggle LED to prove IRQ fired (CS Detected)
+        gpio_xor_mask(1u << PIN_LED);
+
         // Transaction Start (CS Low detected by PIO)
         
         // 1. Abort current DMA to reset pointer

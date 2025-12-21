@@ -46,3 +46,9 @@ pico_add_extra_outputs(pico_sensors_dma)
 add_executable(blink_test src/blink_test.c)
 target_link_libraries(blink_test pico_stdlib hardware_gpio)
 pico_add_extra_outputs(blink_test)
+
+# 4. Pin Sweep Diagnostic
+add_executable(pin_sweep src/pin_sweep.c)
+target_link_libraries(pin_sweep pico_stdlib)
+pico_enable_stdio_usb(pin_sweep 1)
+pico_add_extra_outputs(pin_sweep)
