@@ -60,6 +60,9 @@ static volatile uint32_t sample_count = 0;
 // DMA channels
 static int dma_tx;
 
+// TX buffer index - volatile for ISR access
+static volatile uint8_t tx_idx = 0;
+
 // CS loopback IRQ handler - fires on FALLING edge (Transaction Start)
 void cs_loopback_callback(uint gpio, uint32_t events) {
     if (gpio == PIN_CS_LOOPBACK && (events & GPIO_IRQ_EDGE_FALL)) {
