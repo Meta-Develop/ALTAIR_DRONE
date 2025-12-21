@@ -122,17 +122,14 @@ int main() {
 
     configure_fast_spi_slave();
 
-    // === DMA Init ===
-    dma_tx = dma_claim_unused_channel(true);
-    dma_tx_config = dma_channel_get_default_config(dma_tx);
-    channel_config_set_transfer_data_size(&dma_tx_config, DMA_SIZE_8);
-    channel_config_set_dreq(&dma_tx_config, spi_get_dreq(SPI_SLAVE_PORT, true));
-    channel_config_set_read_increment(&dma_tx_config, true);
-    channel_config_set_write_increment(&dma_tx_config, false);
-
     // Init TX Buffer Header
     memcpy(tx_buffer, HEADER, 4);
     memset(tx_buffer + 4, 0, PAYLOAD_SIZE);
+
+    // Pre-fill TX FIFO 
+    for (int i = 0; i < 8 && spi_is_writable(SPI_SLAVE_PORT); i++) {
+        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[i];
+    }
 
     // === Start 1000Hz Timer ===
     struct repeating_timer timer;
@@ -142,55 +139,43 @@ int main() {
     uint32_t last_heartbeat = 0;
     uint32_t last_sample_count = 0;
     uint32_t last_rate_check = 0;
+    
+    // TX FIFO index for continuous loading
+    volatile uint8_t tx_idx = 0;
 
     while (true) {
-        // Check for new sensor data
+        // Update buffer when new sensor data is available
         if (new_data_ready) {
             new_data_ready = false;
             
             // Pack data into buffer
-            // Float layout: [0]=header1, [1]=reserved, [2-4]=accel, [5-7]=gyro, [8-10]=mag...
             float *floats = (float*)(tx_buffer + 4);
             
-            // Reserved (timestamp or counter)
             floats[0] = (float)sample_count;
             floats[1] = sensor_data.temp;
             
-            // Accel (floats 2-4, bytes 12-23)
+            // Accel (floats 2-4)
             floats[2] = sensor_data.accel[0];
             floats[3] = sensor_data.accel[1];
             floats[4] = sensor_data.accel[2];
             
-            // Gyro (floats 5-7, bytes 24-35)
+            // Gyro (floats 5-7)
             floats[5] = sensor_data.gyro[0];
             floats[6] = sensor_data.gyro[1];
             floats[7] = sensor_data.gyro[2];
-            
-            // Mag, Baro, Range - zeros for now
-            // (Would add MMC5983MA and BMP388 drivers later)
-            
-            // === Setup DMA for Slave Response ===
-            dma_channel_configure(
-                dma_tx,
-                &dma_tx_config,
-                &spi_get_hw(SPI_SLAVE_PORT)->dr,
-                tx_buffer,
-                PAYLOAD_SIZE + 4,
-                false
-            );
+        }
 
-            // Arm DMA
-            dma_channel_start(dma_tx);
-
-            // Signal Data Ready to RPi4
-            sleep_us(10);  // Small delay for DMA to prime FIFO
-            gpio_put(PIN_DATA_READY, 1);
-
-            // Wait for transfer (blocking)
-            dma_channel_wait_for_finish_blocking(dma_tx);
-
-            // Clear handshake
-            gpio_put(PIN_DATA_READY, 0);
+        // === Continuously keep TX FIFO filled ===
+        // This ensures data is always available when master clocks
+        while (spi_is_writable(SPI_SLAVE_PORT)) {
+            spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[tx_idx];
+            tx_idx = (tx_idx + 1) % (PAYLOAD_SIZE + 4);
+        }
+        
+        // Drain RX FIFO (we don't need master's data)
+        while (spi_is_readable(SPI_SLAVE_PORT)) {
+            volatile uint8_t dummy = spi_get_hw(SPI_SLAVE_PORT)->dr;
+            (void)dummy;
         }
 
         // Heartbeat LED (1Hz blink)
