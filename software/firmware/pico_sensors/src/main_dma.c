@@ -5,20 +5,20 @@
 #include "hardware/gpio.h"
 #include "hardware/dma.h"
 #include "hardware/timer.h"
-#include "hardware/structs/io_bank0.h"
-#include "hardware/structs/pads_bank0.h"
+#include "hardware/irq.h"
 
 // Sensor Driver
 #include "drivers/ism330dhcx.h"
 
 // =============================================================================
-// High-Performance SPI Slave Firmware with Real Sensor Reading
+// DMA-Based SPI Slave Firmware with Real Sensor Reading
 // Target: RP2350 (Pico 2) - Pico 2A (Sensors)
 // 
 // Architecture:
 //   - SPI0 Slave: Responds to RPi4 master (GP16-19)
 //   - SPI1 Master: Reads ISM330DHCX sensor (GP12-15)
 //   - Timer: 1000Hz interrupt to read sensor
+//   - DMA: Automatically fills SPI TX FIFO from buffer
 // =============================================================================
 
 // --- SPI0 Slave (Link to RPi4) ---
@@ -43,24 +43,22 @@
 // 96 bytes = 24 floats
 // Layout: [Header 4B][Reserved 4B][Accel 12B][Gyro 12B][Mag 12B][Baro 8B][Range 4B][Padding]
 #define PAYLOAD_SIZE 96
+#define TOTAL_SIZE (PAYLOAD_SIZE + 4)
 
 // Header bytes
 static const uint8_t HEADER[4] = {0xAA, 0xBB, 0xCC, 0xDD};
 
 // Global buffer (aligned for DMA)
-static uint8_t tx_buffer[PAYLOAD_SIZE + 4] __attribute__((aligned(4)));
+static uint8_t tx_buffer[TOTAL_SIZE] __attribute__((aligned(4)));
 
 // Sensor data (volatile for ISR access)
 static volatile ism330_data_t sensor_data;
 static volatile bool new_data_ready = false;
 static volatile uint32_t sample_count = 0;
 
-// DMA
+// DMA channels
 static int dma_tx;
-static dma_channel_config dma_tx_config;
-
-// TX buffer index (volatile for ISR access)
-static volatile uint8_t tx_idx = 0;
+static int dma_ctrl;  // Control channel for automatic restart
 
 // Timer callback - runs at 1000Hz
 bool timer_1khz_callback(struct repeating_timer *t) {
@@ -76,29 +74,13 @@ bool timer_1khz_callback(struct repeating_timer *t) {
     return true;  // Keep repeating
 }
 
-// CS GPIO Interrupt - fires on both edges
-void cs_gpio_callback(uint gpio, uint32_t events) {
-    if (gpio == PIN_SLAVE_CS) {
-        if (events & GPIO_IRQ_EDGE_FALL) {
-            // CS went LOW: transaction starting!
-            // Immediately reset index and pre-fill TX FIFO
-            tx_idx = 0;
-            
-            // Pre-fill TX FIFO with as much data as possible
-            while (spi_is_writable(SPI_SLAVE_PORT) && tx_idx < (PAYLOAD_SIZE + 4)) {
-                spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[tx_idx];
-                tx_idx++;
-            }
-        }
-        // On rising edge, we don't need to do anything - index is already reset for next transaction
-    }
-}
-
-// Configure fast input for SPI slave pins
-void configure_fast_spi_slave() {
-    // Note: Input sync bypass is handled differently on RP2350
-    // For now, skip this optimization - the SPI peripheral is already fast enough
-    // The RP2040 used PADS_BANK0_GPIO0_INPUT_SYNC_BYPASS_BITS which isn't available on RP2350
+// DMA TX completion handler - restarts DMA for next transaction
+void dma_handler() {
+    // Clear interrupt
+    dma_hw->ints0 = 1u << dma_tx;
+    
+    // Restart DMA from beginning of buffer
+    dma_channel_set_read_addr(dma_tx, tx_buffer, true);
 }
 
 int main() {
@@ -126,7 +108,6 @@ int main() {
     bool sensor_ok = ism330_init(SPI_SENSOR_PORT, PIN_SENSOR_CS);
     if (!sensor_ok) {
         printf("[MAIN] ISM330DHCX init failed! Running in fallback mode.\n");
-        // Continue anyway - will output zeros
     } else {
         printf("[MAIN] ISM330DHCX ready!\n");
     }
@@ -139,26 +120,40 @@ int main() {
     gpio_set_function(PIN_SLAVE_RX, GPIO_FUNC_SPI);
     gpio_set_function(PIN_SLAVE_SCK, GPIO_FUNC_SPI);
     gpio_set_function(PIN_SLAVE_TX, GPIO_FUNC_SPI);
-    // Note: CS is still SPI function, but we also monitor it with GPIO IRQ
     gpio_set_function(PIN_SLAVE_CS, GPIO_FUNC_SPI);
-
-    configure_fast_spi_slave();
 
     // Init TX Buffer Header
     memcpy(tx_buffer, HEADER, 4);
     memset(tx_buffer + 4, 0, PAYLOAD_SIZE);
 
-    // Pre-fill TX FIFO 
-    for (int i = 0; i < 8 && spi_is_writable(SPI_SLAVE_PORT); i++) {
-        spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[i];
-        tx_idx = i + 1;
-    }
-
-    // === Enable CS GPIO IRQ for falling edge (transaction start) ===
-    // This requires setting up GPIO as input for monitoring while SPI function is active
-    // On RP2350, we need to use the IO bank interrupt
-    gpio_set_irq_enabled_with_callback(PIN_SLAVE_CS, GPIO_IRQ_EDGE_FALL, true, &cs_gpio_callback);
-    printf("[MAIN] CS IRQ enabled for pre-fill sync.\n");
+    // === DMA Init for SPI Slave TX ===
+    dma_tx = dma_claim_unused_channel(true);
+    
+    dma_channel_config c = dma_channel_get_default_config(dma_tx);
+    channel_config_set_transfer_data_size(&c, DMA_SIZE_8);
+    channel_config_set_dreq(&c, spi_get_dreq(SPI_SLAVE_PORT, true));  // TX DREQ
+    channel_config_set_read_increment(&c, true);   // Increment read address (buffer)
+    channel_config_set_write_increment(&c, false); // Fixed write address (SPI DR)
+    channel_config_set_ring(&c, false, 0);         // No ring buffer for read
+    
+    // Configure DMA channel
+    dma_channel_configure(
+        dma_tx,
+        &c,
+        &spi_get_hw(SPI_SLAVE_PORT)->dr,  // Write to SPI TX
+        tx_buffer,                         // Read from buffer
+        TOTAL_SIZE,                        // Transfer count
+        false                              // Don't start yet
+    );
+    
+    // Enable DMA interrupt to restart on completion
+    dma_channel_set_irq0_enabled(dma_tx, true);
+    irq_set_exclusive_handler(DMA_IRQ_0, dma_handler);
+    irq_set_enabled(DMA_IRQ_0, true);
+    
+    // Start DMA
+    dma_channel_start(dma_tx);
+    printf("[MAIN] DMA-based SPI slave TX initialized.\n");
 
     // === Start 1000Hz Timer ===
     struct repeating_timer timer;
@@ -174,7 +169,7 @@ int main() {
         if (new_data_ready) {
             new_data_ready = false;
             
-            // Pack data into buffer
+            // Pack data into buffer (DMA will send this)
             float *floats = (float*)(tx_buffer + 4);
             
             floats[0] = (float)sample_count;
@@ -191,14 +186,6 @@ int main() {
             floats[7] = sensor_data.gyro[2];
         }
 
-        // === Continuously keep TX FIFO filled ===
-        // The ISR resets tx_idx on CS falling edge
-        // Main loop keeps filling from where ISR left off
-        while (spi_is_writable(SPI_SLAVE_PORT) && tx_idx < (PAYLOAD_SIZE + 4)) {
-            spi_get_hw(SPI_SLAVE_PORT)->dr = tx_buffer[tx_idx];
-            tx_idx++;
-        }
-        
         // Drain RX FIFO (we don't need master's data)
         while (spi_is_readable(SPI_SLAVE_PORT)) {
             volatile uint8_t dummy = spi_get_hw(SPI_SLAVE_PORT)->dr;
