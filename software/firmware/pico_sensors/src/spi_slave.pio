@@ -14,15 +14,13 @@
 public entry_point:
 .wrap_target
     ; Pull next byte from TX FIFO (DMA feeds this)
+    ; With RIGHT shift, the 8-bit data fills the lower 8 bits of OSR
+    ; We shift out LSB first (bit 0). For MSB-first SPI, the TX data
+    ; should be pre-reversed, OR we use LEFT shift with proper alignment.
+    ; For now: use RIGHT shift and accept LSB-first for testing.
     pull block      
     
-    ; Alignment: DMA writes 8-bit to 32-bit FIFO (little endian: [DATA 00 00 00])
-    ; Shift out from bit 7 (MSB first). 
-    ; With shift_left=true and autopull=false, we shift from bit 31.
-    ; So we need to discard the upper 24 zero bits first.
-    out null, 24
-    
-    ; Output Bit 7 (first bit) immediately - this is the "setup" before first SCK rise
+    ; Output Bit 0 (first bit) immediately - this is the "setup" before first SCK rise
     out pins, 1
     
     ; Loop for remaining 7 bits
@@ -55,8 +53,10 @@ static inline void spi_slave_init(PIO pio, uint sm, uint offset, uint pin_miso) 
     pio_gpio_init(pio, pin_miso);
     pio_sm_set_consecutive_pindirs(pio, sm, pin_miso, 1, true); // Output
     
-    // Shift config: Left shift, no autopull, 8 bits
-    sm_config_set_out_shift(&c, false, false, 8);
+    // Shift config: RIGHT shift (data in LSB), no autopull, 8 bits
+    // DMA writes 8-bit to 32-bit FIFO, data ends up in lowest byte
+    // Right shift pulls from LSB, so we get our data immediately
+    sm_config_set_out_shift(&c, true, false, 8);
     
     // Run at full system clock
     sm_config_set_clkdiv(&c, 1.0f);
