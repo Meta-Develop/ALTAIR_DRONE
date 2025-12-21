@@ -75,16 +75,9 @@ bool timer_1khz_callback(struct repeating_timer *t) {
 
 // Configure fast input for SPI slave pins
 void configure_fast_spi_slave() {
-    // Enable input sync bypass for lower latency on slave pins
-    hw_write_masked(&padsbank0_hw->io[PIN_SLAVE_SCK], 
-        PADS_BANK0_GPIO0_INPUT_SYNC_BYPASS_BITS, 
-        PADS_BANK0_GPIO0_INPUT_SYNC_BYPASS_BITS);
-    hw_write_masked(&padsbank0_hw->io[PIN_SLAVE_RX], 
-        PADS_BANK0_GPIO0_INPUT_SYNC_BYPASS_BITS, 
-        PADS_BANK0_GPIO0_INPUT_SYNC_BYPASS_BITS);
-    hw_write_masked(&padsbank0_hw->io[PIN_SLAVE_CS], 
-        PADS_BANK0_GPIO0_INPUT_SYNC_BYPASS_BITS, 
-        PADS_BANK0_GPIO0_INPUT_SYNC_BYPASS_BITS);
+    // Note: Input sync bypass is handled differently on RP2350
+    // For now, skip this optimization - the SPI peripheral is already fast enough
+    // The RP2040 used PADS_BANK0_GPIO0_INPUT_SYNC_BYPASS_BITS which isn't available on RP2350
 }
 
 int main() {
