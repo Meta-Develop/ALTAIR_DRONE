@@ -24,6 +24,16 @@ HANDOVER_CONTEXT.md
 task.md
 .agent/
 
+# Agent Context Documents (do not commit)
+AUDIT_*.md
+GCS_CONCEPT.md
+PRE_FLIGHT_CHECKLIST.md
+SYSTEM_ARCHITECTURE.md
+VERIFICATION_*.md
+WIRING_DIAGRAM.md
+**/ACADOS_SETUP.md
+!**/README.md
+
 # Build and Temp Files
 *.uf2
 *.log
