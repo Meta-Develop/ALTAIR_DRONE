@@ -77,9 +77,12 @@ int64_t rearm_irq_callback(alarm_id_t id, void *user_data) {
 }
 
 // CS Edge Callback - Resync DMA
+volatile uint32_t irq_count = 0;
+
 // CS (GP17) Falling Edge Handler
 void cs_irq_handler(uint gpio, uint32_t events) {
     if (gpio == PIN_CS && (events & GPIO_IRQ_EDGE_FALL)) {
+        irq_count++;
         // --- Start of Transaction ---
         
         // 1. Disable IRQ IMMEDIATELY
@@ -241,12 +244,16 @@ int main() {
     add_repeating_timer_us(-1000, timer_1khz_callback, NULL, &timer);
 
     uint32_t last_heartbeat = 0;
-    uint32_t last_sample_count = 0;
-    uint32_t last_rate_check = 0;
+    uint32_t last_irq_count = 0;
 
     while (true) {
-        // Toggle LED based on CS state? No, heartbeat is better.
-        // Update ISR count in buffer for visibility? Done in ISR.
+        uint32_t now = to_ms_since_boot(get_absolute_time());
+        if (now - last_heartbeat >= 1000) {
+            printf("[MAIN] Heartbeat. Uptime: %d ms, CS IRQ Count: %d (Delta: %d)\n", 
+                   now, irq_count, irq_count - last_irq_count);
+            last_irq_count = irq_count;
+            last_heartbeat = now;
+        }
         
         // Update buffer when new sensor data is available
         if (new_data_ready) {
