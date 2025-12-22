@@ -203,10 +203,8 @@ int main() {
                 spi_read_blocking(spi1, 0x00, imu_buf, 12);
                 gpio_put(PIN_CS_IMU, 1);
                 
-                    // Pack bytes into words (Little Endian host)
-                    uint8_t* tx_byte_ptr = (uint8_t*)tx_buffer;
-                    tx_byte_ptr[4 + i] = imu_buf[i];
-                }
+                // Pack bytes into words (Little Endian host)
+                memcpy(((uint8_t*)tx_buffer) + 4, imu_buf, 12);
             }
         }
         
