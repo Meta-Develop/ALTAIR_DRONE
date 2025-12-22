@@ -294,7 +294,6 @@ private:
                               rx[0], rx[1], rx[2], rx[3]);
              }
         }
-        }
     }
 
     std::unique_ptr<SysfsGPIO> gpio_ready_;
