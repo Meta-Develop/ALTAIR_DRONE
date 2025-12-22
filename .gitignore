@@ -30,3 +30,28 @@ task.md
 temp.b64
 tmp_clone/
 Software/build_error.log
+
+# Pico SDK Build Artifacts
+**/build_pico*/
+**/build_debug*/
+**/_deps/
+**/CMakeCache.txt
+**/CMakeFiles/
+**/*.ninja*
+**/*.obj
+**/*.elf
+**/*.dis
+**/*.hex
+**/*.bin
+**/pioasm-install/
+
+# Debug Scripts (temporary)
+monitor_gpio.sh
+toggle_gpio.sh
+debug_report.md
+staged_changes.txt
+git_log*.txt
+
+# Submodules that shouldn't be committed as files
+software/firmware/debugprobe
+software/firmware/micro_ros_raspberrypi_pico_sdk
