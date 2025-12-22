@@ -146,6 +146,7 @@ public:
 
         // Start Poll Loop
         running_ = true;
+        std::cerr << "Node Initialized. Starting Poll Loop..." << std::endl;
         poll_thread_ = std::thread(&SpiBridgeNode::pollLoop, this);
     }
 
@@ -157,6 +158,7 @@ public:
 
 private:
     void pollLoop() {
+        std::cerr << "Poll Loop Started." << std::endl;
         struct pollfd pfd;
         pfd.fd = gpio_ready_->get_fd();
         pfd.events = POLLPRI; 
@@ -165,23 +167,22 @@ private:
         std::vector<uint8_t> tx(PACKET_BYTES, 0);
 
         gpio_ready_->clear_interrupt();
-
-        // Check initial state
-        lseek(gpio_ready_->get_fd(), 0, SEEK_SET);
-        char val_buf[2] = {0};
-        read(gpio_ready_->get_fd(), val_buf, 2);
-        if (val_buf[0] == '1') {
-             performRead(tx, rx);
-        }
         
+        std::cerr << "Entering Main Loop..." << std::endl;
         while (running_ && rclcpp::ok()) {
              // Blocking poll
+             // std::cerr << "Polling..." << std::endl;
              int ret = poll(&pfd, 1, 100); // 100ms timeout
              if (ret > 0 && (pfd.revents & POLLPRI)) {
+                // std::cerr << "Interrupt received!" << std::endl;
                 gpio_ready_->clear_interrupt();
                 performRead(tx, rx);
              } else if (ret == 0) {
-                 // Timeout, just check again
+                 // Timeout - send a heartbeat/kickstart?
+                 // std::cerr << "Poll Timeout." << std::endl;
+             } else {
+                 // Error
+                 // std::cerr << "Poll Error: " << ret << std::endl;
              }
         }
     }
