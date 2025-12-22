@@ -13,34 +13,9 @@
 ; Entry point: PIO is reset here by C code on CS fall
 public entry_point:
 .wrap_target
-    ; Pull next byte from TX FIFO (DMA feeds this)
-    ; With RIGHT shift, the 8-bit data fills the lower 8 bits of OSR
-    ; We shift out LSB first (bit 0). For MSB-first SPI, the TX data
-    ; should be pre-reversed, OR we use LEFT shift with proper alignment.
-    ; For now: use RIGHT shift and accept LSB-first for testing.
-    pull block      
-    
-    ; Output Bit 0 (first bit) immediately
-    ; Force pin direction to OUTPUT (1) for 1 pin starting at 'set' base (mapped to MISO)
     set pindirs, 1
-    
-    out pins, 1
-    
-    ; Loop for remaining 7 bits
-    set x, 6
-bitloop:
-    ; Wait for SCK Rising Edge (Master samples MISO here in CPHA=0)
-    wait 1 gpio 18
-    
-    ; Wait for SCK Falling Edge (Slave shifts next bit here)
-    wait 0 gpio 18
-    out pins, 1
-    
-    jmp x-- bitloop
-    
-    ; After 8 bits sent, wait for last SCK cycle to complete
-    wait 1 gpio 18
-    wait 0 gpio 18
+    set pins, 1 [31]
+    set pins, 0 [31]
 .wrap
 
 % c-sdk {
