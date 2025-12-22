@@ -52,13 +52,7 @@ void cs_irq_handler(uint gpio, uint32_t events) {
         pio_sm_put(pio, sm, 0xFF); 
         pio_sm_put(pio, sm, 0xFF); 
         
-        // 4. DMA the rest (DISABLED FOR DEBUG)
-        // dma_channel_set_trans_count(dma_tx, TOTAL_SIZE - 4, false);
-        // dma_channel_set_read_addr(dma_tx, tx_buffer + 4, true);
-        
-        // 5. Enable PIO (Wait for SCK)
-        busy_wait_us_32(2); 
-        pio_sm_set_enabled(pio, sm, true);
+    // cs_irq_handler logic is unused in this test mode
     }
 }
 
@@ -95,12 +89,19 @@ int main() {
 
     dma_channel_configure(dma_tx, &c, &pio->txf[sm], tx_buffer + 4, 0, false);
     
-    // CS IRQ Init
+    // --- PIO DRIVER TEST MODE ---
+    // Enable PIO immediately to verify hardware driver
+    pio_sm_set_enabled(pio, sm, true);
+    printf("[MAIN] PIO Enabled for continuous blink test (IRQ Disabled).\n");
+    
+    // CS IRQ Init (DISABLED for Blink Test)
+    /*
     gpio_init(PIN_CS);
     gpio_set_dir(PIN_CS, GPIO_IN);
     gpio_pull_up(PIN_CS); 
     gpio_set_irq_enabled_with_callback(PIN_CS, GPIO_IRQ_EDGE_FALL, true, &cs_irq_handler);
     printf("[MAIN] CS IRQ Enabled.\n");
+    */
     
     uint32_t last_rearm = 0;
     
