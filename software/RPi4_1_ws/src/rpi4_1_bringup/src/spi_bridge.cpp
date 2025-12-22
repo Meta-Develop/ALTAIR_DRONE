@@ -170,20 +170,10 @@ private:
         
         std::cerr << "Entering Main Loop..." << std::endl;
         while (running_ && rclcpp::ok()) {
-             // Blocking poll
-             // std::cerr << "Polling..." << std::endl;
-             int ret = poll(&pfd, 1, 100); // 100ms timeout
-             if (ret > 0 && (pfd.revents & POLLPRI)) {
-                std::cerr << "Interrupt received!" << std::endl;
-                gpio_ready_->clear_interrupt();
-                performRead(tx, rx);
-             } else if (ret == 0) {
-                 // Timeout - send a heartbeat/kickstart?
-                 std::cerr << "Poll Timeout." << std::endl;
-             } else {
-                 // Error
-                 std::cerr << "Poll Error: " << ret << std::endl;
-             }
+             // Blind Polling Mode (IRQ line broken?)
+             // poll(&pfd, 1, 100); 
+             usleep(500); // Poll at ~2kHz
+             performRead(tx, rx);
         }
     }
 
@@ -202,7 +192,7 @@ private:
          ioctl(spi_fd_, SPI_IOC_MESSAGE(1), &tr);
          
          gpio_cs_->setValue(1);
-         usleep(6000); // Post-transaction delay for PIO re-arm
+         usleep(50); // Minimal delay for signal integrity
          
          processData(rx);
     }
