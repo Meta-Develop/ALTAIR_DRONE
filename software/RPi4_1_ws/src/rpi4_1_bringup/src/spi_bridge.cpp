@@ -168,6 +168,8 @@ private:
 // I will replace the SysfsGPIO class and SpiBridgeNode definitions up to performRead.
 
     void performRead(std::vector<uint8_t>& tx, std::vector<uint8_t>& rx) {
+         std::cerr << "Trace: performRead start" << std::endl;
+         
          // Manual CS Assert (GPIO 5)
          gpio_cs_->setValue(0);
          
@@ -183,7 +185,9 @@ private:
          tr.speed_hz = 1000000; 
          tr.bits_per_word = 8;
          
-         ioctl(spi_fd_, SPI_IOC_MESSAGE(1), &tr);
+         std::cerr << "Trace: calling ioctl" << std::endl;
+         int ret = ioctl(spi_fd_, SPI_IOC_MESSAGE(1), &tr);
+         std::cerr << "Trace: ioctl returned " << ret << std::endl;
          
          // Manual CS Deassert (GPIO 5)
          gpio_cs_->setValue(1);
