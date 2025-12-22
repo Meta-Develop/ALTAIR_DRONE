@@ -1,0 +1,70 @@
+; SPI Slave TX Only (CPHA=0, CPOL=0)
+; 
+; This is a simple byte-stream serializer.
+; C code handles CS detection via GPIO IRQ, which restarts PIO/DMA.
+; PIO just shifts out bits on SCK edges.
+;
+; Pin assignments:
+; - OUT: MISO (GP19)
+; - Hardcoded wait on SCK (GPIO 18)
+
+.program spi_slave
+
+; Entry point: PIO is reset here by C code on CS fall
+public entry_point:
+.wrap_target
+    ; Pull next byte. RIGHT shift.
+    pull block      
+    
+    ; Force pin direction to OUTPUT (1) mapped to MISO
+    set pindirs, 1
+    
+    ; Output Bit 0 (first bit) immediately
+    out pins, 1
+    
+    ; Loop for remaining 7 bits
+    set x, 6
+bitloop:
+    ; Wait for SCK Rising Edge (Master samples)
+    wait 1 gpio 18
+    
+    ; Wait for SCK Falling Edge (Slave shifts)
+    wait 0 gpio 18
+    out pins, 1
+    
+    jmp x-- bitloop
+    
+    ; After 8 bits, wait for last SCK fall to complete
+    wait 1 gpio 18
+    wait 0 gpio 18
+.wrap
+
+% c-sdk {
+#include "hardware/gpio.h"
+
+static inline void spi_slave_init(PIO pio, uint sm, uint offset, uint pin_miso) {
+    pio_sm_config c = spi_slave_program_get_default_config(offset);
+    
+    // Set OUT pin (MISO)
+    sm_config_set_out_pins(&c, pin_miso, 1);
+    
+    // Set SET pin (MISO) for 'set pindirs' instruction
+    sm_config_set_set_pins(&c, pin_miso, 1);
+    
+    // Init GPIO for MISO
+    pio_gpio_init(pio, pin_miso);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_miso, 1, true); // Output
+    
+    // Shift config: LEFT shift (MSB first), no autopull, 32 bits
+    // We provide 32-bit words with data in MSB (e.g., 0xAA000000)
+    // 'out' instruction consumes from MSB (31) and shifts OSR left
+    sm_config_set_out_shift(&c, false, false, 32);
+    
+    // Run at full system clock
+    sm_config_set_clkdiv(&c, 1.0f);
+    
+    // Initialize but don't enable yet (C code enables on CS fall)
+    pio_sm_init(pio, sm, offset, &c);
+    // pio_sm_set_enabled(pio, sm, true); // DON'T enable here
+}
+%}
