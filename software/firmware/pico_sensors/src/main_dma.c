@@ -234,6 +234,9 @@ int main() {
     printf("[MAIN] TX Buffer filled with static test pattern (AA BB CC DD + 01 02 03...)\n");
     
     // --- GPIO IRQ Setup on CS (GP17) ---
+    gpio_init(PIN_CS);
+    gpio_set_dir(PIN_CS, GPIO_IN);
+    gpio_pull_up(PIN_CS); // Idle High
     gpio_set_irq_enabled_with_callback(PIN_CS, GPIO_IRQ_EDGE_FALL, true, &cs_irq_handler);
     printf("[MAIN] CS Falling Edge IRQ Enabled on GP17.\n");
     
