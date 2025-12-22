@@ -15,14 +15,13 @@
 #include <pthread.h>
 #include <sched.h> 
 
-// Full Sensor Suite 30-byte Packet Format:
 // [0-3]:   Header AA BB CC DD
-// [4-15]:  IMU raw: GX_L, GX_H, GY_L, GY_H, GZ_L, GZ_H, AX_L, AX_H, AY_L, AY_H, AZ_L, AZ_H
-// [16-21]: Mag raw: MX_H, MX_L, MY_H, MY_L, MZ_H, MZ_L (Big Endian)
-// [22-25]: Baro: Pressure (4 bytes, float raw)
-// [26-27]: ToF Distance: mm (2 bytes, Big Endian)
-// [28-29]: Reserved
-#define PACKET_BYTES 30
+// [4-15]:  IMU raw: 12 bytes
+// [16-21]: Mag raw: 6 bytes
+// [22-25]: Baro: 4 bytes
+// [26-27]: ToF: 2 bytes
+// [28-31]: Reserved/Padding (byte alignment)
+#define PACKET_BYTES 32
 
 // ISM330DHCX Sensitivities
 #define ISM330_SENS_16G     (0.488f / 1000.0f * 9.81f)  // mg/LSB -> m/s²
@@ -283,10 +282,18 @@ private:
             
             // Console Logging (Decimated)
             static int log_cnt = 0;
-            if (log_cnt++ % 50 == 0) { // Log every 50 packets (~0.5s)
-                 RCLCPP_INFO(this->get_logger(), "IMU:[%.2f,%.2f,%.2f] MAG:[%.6f] BARO:%.0f TOF:%.3fm",
-                             accel[2], gyro[2], mag[2], pressure, tof_msg.range);
-            }
+             if (log_cnt++ % 50 == 0) { // Log every 50 packets (~0.5s)
+                  RCLCPP_INFO(this->get_logger(), "IMU:[%.2f,%.2f,%.2f] MAG:[%.6f] BARO:%.0f TOF:%.3fm",
+                              accel[2], gyro[2], mag[2], pressure, tof_msg.range);
+             }
+        } else {
+             // Header Check Failed
+             static int err_cnt = 0;
+             if (err_cnt++ % 50 == 0) {
+                 RCLCPP_ERROR(this->get_logger(), "Bad Header: %02X %02X %02X %02X (Expected AA BB CC DD)",
+                              rx[0], rx[1], rx[2], rx[3]);
+             }
+        }
         }
     }
 
