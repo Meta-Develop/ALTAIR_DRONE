@@ -136,6 +136,10 @@ int main() {
     printf("[MAIN] Init VL53L4CX...\n");
     tof_ok = vl53_init(i2c0);
     printf("[MAIN] VL53L4CX: %s\n", tof_ok ? "OK" : "FAIL");
+    if (tof_ok) {
+        vl53_start_ranging(i2c0);
+        printf("[MAIN] VL53L4CX ranging started\n");
+    }
 
     // --- PIO SPI SLAVE INIT ---
     gpio_init(PIN_MISO_SLAVE); 
