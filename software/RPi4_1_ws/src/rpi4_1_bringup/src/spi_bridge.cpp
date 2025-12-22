@@ -202,7 +202,7 @@ private:
          ioctl(spi_fd_, SPI_IOC_MESSAGE(1), &tr);
          
          gpio_cs_->setValue(1);
-         usleep(6000); // Post-transaction delay for PIO re-arm
+         usleep(50); // Minimal delay for signal integrity
          
          processData(rx);
     }
