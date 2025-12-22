@@ -31,7 +31,7 @@ PIO pio = pio0;
 uint sm = 0;
 uint offset = 0;
 int dma_tx;
-uint8_t tx_buffer[TOTAL_SIZE] __attribute__((aligned(4))); 
+uint32_t tx_buffer[TOTAL_SIZE] __attribute__((aligned(4))); 
 volatile uint32_t irq_count = 0;
 
 // CS Falling Edge Interrupt Handler
@@ -53,10 +53,10 @@ void cs_irq_handler(uint gpio, uint32_t events) {
         pio_sm_exec(pio, sm, pio_encode_jmp(offset + spi_slave_offset_entry_point));
         
         // 3. Pre-fill Header (AA BB CC DD)
-        pio_sm_put(pio, sm, 0xAA); 
-        pio_sm_put(pio, sm, 0xBB); 
-        pio_sm_put(pio, sm, 0xCC); 
-        pio_sm_put(pio, sm, 0xDD); 
+        pio_sm_put(pio, sm, 0xAA000000); 
+        pio_sm_put(pio, sm, 0xBB000000); 
+        pio_sm_put(pio, sm, 0xCC000000); 
+        pio_sm_put(pio, sm, 0xDD000000); 
         
         // 4. DMA the rest
         dma_channel_set_trans_count(dma_tx, TOTAL_SIZE - 4, false);
@@ -80,10 +80,10 @@ int main() {
     gpio_init(PIN_MISO); 
     
     // Buffer Init
-    tx_buffer[0] = 0xAA; tx_buffer[1] = 0xBB; tx_buffer[2] = 0xCC; tx_buffer[3] = 0xDD;
-    for (int i = 4; i < TOTAL_SIZE; i++) tx_buffer[i] = (uint8_t)(i - 3);
+    tx_buffer[0] = 0xAA000000; tx_buffer[1] = 0xBB000000; tx_buffer[2] = 0xCC000000; tx_buffer[3] = 0xDD000000;
+    for (int i = 4; i < TOTAL_SIZE; i++) tx_buffer[i] = ((uint32_t)(i - 3)) << 24;
 
-    printf("Pico SPI Slave DMA (PIO Pindirs Fix)\n");
+    printf("Pico SPI Slave DMA (PIO 32-bit MSB Fix)\n");
 
     // PIO Init
     offset = pio_add_program(pio, &spi_slave_program);
@@ -95,7 +95,7 @@ int main() {
     // DMA Init
     dma_tx = dma_claim_unused_channel(true);
     dma_channel_config c = dma_channel_get_default_config(dma_tx);
-    channel_config_set_transfer_data_size(&c, DMA_SIZE_8);
+    channel_config_set_transfer_data_size(&c, DMA_SIZE_32);
     channel_config_set_read_increment(&c, true);
     channel_config_set_write_increment(&c, false);
     channel_config_set_dreq(&c, pio_get_dreq(pio, sm, true)); 
