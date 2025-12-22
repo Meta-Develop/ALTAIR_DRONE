@@ -1,0 +1,46 @@
+.program dshot
+.side_set 1
+
+; DShot protocol:
+; Frame: 16 bits. MSB first.
+; Bit 0: High for 37.5% (3/8), Low for 62.5% (5/8)
+; Bit 1: High for 75.0% (6/8), Low for 25.0% (2/8)
+; Cycle length: 8 cycles per bit.
+
+.wrap_target
+    pull block side 0       ; Idle Low. Pull data.
+    set x, 15 side 0        ; 16 bits to shift
+bitloop:
+    out y, 1 side 1         ; Cycle 1: Start High (Get bit)
+    jmp !y do_zero side 1   ; Cycle 2: If 0, jump. Else 1 (Still High).
+do_one:
+    nop side 1 [3]          ; Cycle 3,4,5,6: Stay High (Total 6 High)
+    jmp bitloop side 0 [1]  ; Cycle 7,8: Go Low (Total 2 Low) -> Loop
+do_zero:
+    nop side 1              ; Cycle 3: Stay High (Total 3 High)
+    nop side 0 [2]          ; Cycle 4,5,6: Go Low
+    jmp bitloop side 0 [1]  ; Cycle 7,8: Stay Low (Total 5 Low) -> Loop
+.wrap
+
+% c-sdk {
+#include "hardware/clocks.h"
+#include "hardware/gpio.h"
+
+static inline void dshot_program_init(PIO pio, uint sm, uint offset, uint pin) {
+    pio_sm_config c = dshot_program_get_default_config(offset);
+
+    sm_config_set_sideset_pins(&c, pin);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, true);
+    pio_gpio_init(pio, pin);
+
+    // DShot is MSB first. 
+    // shift_right=false (shift left), autopull=false
+    // We write data left-aligned or rely on pull behavior.
+    // If we shift left, 'out' takes from the MSB (bit 31).
+    sm_config_set_out_shift(&c, false, false, 32); 
+    
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+    
+    pio_sm_init(pio, sm, offset, &c);
+}
+%}

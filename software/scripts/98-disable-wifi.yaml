@@ -1,0 +1,5 @@
+network:
+  version: 2
+  wifis:
+    wlan0:
+      activation-mode: off

@@ -1,0 +1,28 @@
+# Motor and Frame Parameters for ALTAIR Drone (Cargo Config)
+# Used for NMPC Constraints, Dynamics, and Mixer Calibration
+
+# Physical Geometry
+# 15 inch prop = 38.1cm diameter.
+# Hexacopter motor spacing = Arm Length (Equilateral triangle).
+# Arm Length 0.40m = 40cm spacing.
+# Clearance = 40cm - 38.1cm = 1.9cm (Tight but feasible).
+arm_length: 0.40 # meters 
+
+# Mass Properties
+mass_override: 6.0 # kg (Target Cargo Weight)
+inertia_diag: [0.2, 0.2, 0.4] # Estimated for 6kg/0.8m span
+
+# Motor Performance (X5315 420KV @ 6S LiPo)
+# EVIDENCE FOR ESTIMATE:
+# 1. Datasheet shows 8027g thrust at 31V (approx 8S) with 15x6x3 prop.
+# 2. You are using 6S (Nominal 22.2V).
+# 3. Voltage Scaling: (22.2V / 31V)^2 = ~0.51.
+# 4. Thrust at 6S ~ 8000g * 0.51 = 4080g.
+# 5. Prop Correction: 2-blade (yours) vs 3-blade (datasheet) -> ~80% derating.
+# 6. Final Estimate: 4080g * 0.8 ~= 3264g (~32N).
+# 7. Conservative Limit set to 30N (3kg).
+max_thrust: 30.0 # Newtons per motor
+min_thrust: 0.5  # Newtons
+
+# Aerodynamics
+torque_coeff: 0.02 # Nm drag per N of thrust (Estimated)
