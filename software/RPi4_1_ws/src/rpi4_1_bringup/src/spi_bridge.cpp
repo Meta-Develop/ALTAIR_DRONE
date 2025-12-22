@@ -154,18 +154,41 @@ public:
 
 private:
     void pollLoop() {
-        // ... (existing pollLoop logic is fine, will be kept by partial replacement if carefully targeted, but replace tool needs context)
-        // I will replace the whole class to be safe or target specific blocks. 
-        // The previous tool usage viewed the whole file, so I have context.
-        // Let's replace the constructor to the end of performRead since I changed SysfsGPIO and performRead.
+        fprintf(stderr, "Trace: pollLoop started\n");
+        fflush(stderr);
+
+        struct pollfd pfd;
+        pfd.fd = gpio_ready_->get_fd();
+        pfd.events = POLLPRI; // Interrupt
+
+        std::vector<uint8_t> rx(PAYLOAD_BYTES + 4); 
+        std::vector<uint8_t> tx(PAYLOAD_BYTES + 4, 0);
+
+        // Dummy read to clear initial state
+        gpio_ready_->clear_interrupt();
+
+        // KICKSTART DEADLOCK CHECK
+        if (gpio_ready_->get_fd() >= 0) {
+            lseek(gpio_ready_->get_fd(), 0, SEEK_SET);
+            char val_buf[2] = {0};
+            read(gpio_ready_->get_fd(), val_buf, 2);
+            if (val_buf[0] == '1') {
+                 fprintf(stderr, "Trace: Startup Line HIGH, kickstarting\n");
+                 performRead(tx, rx);
+            }
+        }
         
-        // Actually, let's just use the replace setup I crafted above which covers SysfsGPIO and SpiBridgeNode constructor.
-        // I also need performRead to have Manual CS.
-        
-        // Let's do SysfsGPIO first.
+        fprintf(stderr, "Trace: pollLoop entering while\n");
+        fflush(stderr);
+
+        while (running_ && rclcpp::ok()) {
+            fprintf(stderr, "Trace: Calling performRead\n");
+            fflush(stderr);
+            performRead(tx, rx);
+            usleep(100000);  // 100ms between reads
+        }
+        fprintf(stderr, "Trace: pollLoop exited\n");
     }
-// Wait, I can't put comments inside the ReplacementContent that are not in valid location.
-// I will replace the SysfsGPIO class and SpiBridgeNode definitions up to performRead.
 
     void performRead(std::vector<uint8_t>& tx, std::vector<uint8_t>& rx) {
          std::cerr << "Trace: performRead start" << std::endl;
