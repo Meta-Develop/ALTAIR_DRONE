@@ -21,16 +21,32 @@ static const uint8_t HEADER[4] = {0xAA, 0xBB, 0xCC, 0xDD};
 class SysfsGPIO {
 public:
     SysfsGPIO(int pin, bool input) : pin_(pin) {
-        // Export
+        // 1. Try to Unexport first to clear any stale state
+        int fd_un = open("/sys/class/gpio/unexport", O_WRONLY);
+        if (fd_un >= 0) {
+            std::string s = std::to_string(pin);
+            write(fd_un, s.c_str(), s.length());
+            close(fd_un);
+        }
+        usleep(100000); // Wait 100ms for cleanup
+
+        // 2. Export
         int fd = open("/sys/class/gpio/export", O_WRONLY);
         if (fd >= 0) {
             std::string s = std::to_string(pin);
             write(fd, s.c_str(), s.length());
             close(fd);
         }
-
-        // Direction
+        
+        // 3. Wait for filesystem to create the gpio directory (up to 1s)
         std::string path_dir = "/sys/class/gpio/gpio" + std::to_string(pin) + "/direction";
+        int retries = 0;
+        while (access(path_dir.c_str(), F_OK) == -1 && retries < 10) {
+            usleep(100000); // 100ms
+            retries++;
+        }
+
+        // 4. Direction
         fd = open(path_dir.c_str(), O_WRONLY);
         if (fd >= 0) {
             if (input) write(fd, "in", 2);
@@ -40,7 +56,7 @@ public:
              std::cerr << "Failed to open GPIO Direction: " << path_dir << std::endl;
         }
 
-        // Edge (for Interrupts)
+        // 5. Edge (for Interrupts)
         if (input) {
             std::string path_edge = "/sys/class/gpio/gpio" + std::to_string(pin) + "/edge";
             fd = open(path_edge.c_str(), O_WRONLY);
@@ -52,7 +68,7 @@ public:
             }
         }
 
-        // Value FD (Keep open)
+        // 6. Value FD (Keep open)
         std::string path_val = "/sys/class/gpio/gpio" + std::to_string(pin) + "/value";
         fd_ = open(path_val.c_str(), O_RDWR);
         if (fd_ < 0) {
@@ -60,7 +76,10 @@ public:
         }
     }
 
-    ~SysfsGPIO() { if (fd_ >= 0) close(fd_); }
+    ~SysfsGPIO() { 
+        if (fd_ >= 0) close(fd_); 
+        // Optional: unexport on destruction? Better to leave it exported to avoid thrashing.
+    }
 
     int get_fd() const { return fd_; }
     
@@ -101,12 +120,11 @@ public:
         spi_fd_ = open("/dev/spidev0.0", O_RDWR);
         if (spi_fd_ < 0) RCLCPP_ERROR(this->get_logger(), "SPI Open Failed");
         
-        uint32_t speed = 8000000; // 8MHz (Lower slightly for stability first)
+        uint32_t speed = 8000000; // 8MHz
         uint8_t mode = 0;
         uint8_t bits = 8;
-        // Disable Kernel CS (We use manual)
-        // SPI_NO_CS might be needed in mode if driver supports it, 
-        // but otherwise ignoring CE0 is fine if disconnected.
+        // NOTE: We use Manual CS (GPIO 5), ignoring whatever CE0 does.
+        // Even if kernel toggles CE0 (connected to nowhere), our GPIO 5 controls the Pico.
         
         ioctl(spi_fd_, SPI_IOC_WR_MODE, &mode);
         ioctl(spi_fd_, SPI_IOC_WR_BITS_PER_WORD, &bits);
@@ -136,38 +154,25 @@ public:
 
 private:
     void pollLoop() {
-        struct pollfd pfd;
-        pfd.fd = gpio_ready_->get_fd();
-        pfd.events = POLLPRI; // Interrupt
-
-        std::vector<uint8_t> rx(PAYLOAD_BYTES + 4); 
-        std::vector<uint8_t> tx(PAYLOAD_BYTES + 4, 0);
-
-        // Dummy read to clear initial state
-        gpio_ready_->clear_interrupt();
-
-        // KICKSTART DEADLOCK CHECK
-        if (gpio_ready_->get_fd() >= 0) {
-            lseek(gpio_ready_->get_fd(), 0, SEEK_SET);
-            char val_buf[2] = {0};
-            read(gpio_ready_->get_fd(), val_buf, 2);
-            if (val_buf[0] == '1') {
-                 RCLCPP_WARN(this->get_logger(), "Startup: Line is HIGH. Kickstarting SPI read.");
-                 performRead(tx, rx);
-            }
-        }
-
-        while (running_ && rclcpp::ok()) {
-            // BYPASS HANDSHAKE: Just poll at ~10Hz
-            // The Pico PIO is always ready since CS is held low
-            performRead(tx, rx);
-            usleep(100000);  // 100ms between reads
-        }
+        // ... (existing pollLoop logic is fine, will be kept by partial replacement if carefully targeted, but replace tool needs context)
+        // I will replace the whole class to be safe or target specific blocks. 
+        // The previous tool usage viewed the whole file, so I have context.
+        // Let's replace the constructor to the end of performRead since I changed SysfsGPIO and performRead.
+        
+        // Actually, let's just use the replace setup I crafted above which covers SysfsGPIO and SpiBridgeNode constructor.
+        // I also need performRead to have Manual CS.
+        
+        // Let's do SysfsGPIO first.
     }
+// Wait, I can't put comments inside the ReplacementContent that are not in valid location.
+// I will replace the SysfsGPIO class and SpiBridgeNode definitions up to performRead.
 
     void performRead(std::vector<uint8_t>& tx, std::vector<uint8_t>& rx) {
-         // NOTE: Kernel SPI driver controls CE0 automatically (GPIO 8)
-         // Manual GPIO 5 CS is no longer used since CS rewire to GPIO 8
+         // Manual CS Assert (GPIO 5)
+         gpio_cs_->setValue(0);
+         
+         // Setup Delay: 50us
+         usleep(50); 
          
          struct spi_ioc_transfer tr;
          memset(&tr, 0, sizeof(tr));
@@ -180,9 +185,11 @@ private:
          
          ioctl(spi_fd_, SPI_IOC_MESSAGE(1), &tr);
          
-         // Post-Transaction Delay: Give Pico time to complete CS IRQ handler
-         // and re-arm for next transaction (5ms dead time in Pico firmware)
-         usleep(6000);  // 6ms > 5ms re-arm delay
+         // Manual CS Deassert (GPIO 5)
+         gpio_cs_->setValue(1);
+         
+         // Post-Transaction Delay: 6ms for Pico Re-arm
+         usleep(6000);
          
          processData(rx);
     }
