@@ -52,11 +52,11 @@ void cs_irq_handler(uint gpio, uint32_t events) {
         // Execute offset jump to reset PC
         pio_sm_exec(pio, sm, pio_encode_jmp(offset + spi_slave_offset_entry_point));
         
-        // 3. Pre-fill Header (0xFF for Debug Visibility)
-        pio_sm_put(pio, sm, 0xFF); 
-        pio_sm_put(pio, sm, 0xFF); 
-        pio_sm_put(pio, sm, 0xFF); 
-        pio_sm_put(pio, sm, 0xFF); 
+        // 3. Pre-fill Header (AA BB CC DD)
+        pio_sm_put(pio, sm, 0xAA); 
+        pio_sm_put(pio, sm, 0xBB); 
+        pio_sm_put(pio, sm, 0xCC); 
+        pio_sm_put(pio, sm, 0xDD); 
         
         // 4. DMA the rest
         dma_channel_set_trans_count(dma_tx, TOTAL_SIZE - 4, false);
