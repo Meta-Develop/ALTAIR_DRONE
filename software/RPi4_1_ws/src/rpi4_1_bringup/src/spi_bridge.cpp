@@ -12,20 +12,24 @@
 #include <pthread.h>
 #include <sched.h> 
 
-// 9DoF 22-byte Packet Format:
-// [0-3]: Header AA BB CC DD
-// [4-15]: IMU raw: GX_L, GX_H, GY_L, GY_H, GZ_L, GZ_H, AX_L, AX_H, AY_L, AY_H, AZ_L, AZ_H
-// [16-21]: Mag raw: MX_H, MX_L, MY_H, MY_L, MZ_H, MZ_L (Big Endian from sensor)
-#define PACKET_BYTES 22
+// Full Sensor Suite 30-byte Packet Format:
+// [0-3]:   Header AA BB CC DD
+// [4-15]:  IMU raw: GX_L, GX_H, GY_L, GY_H, GZ_L, GZ_H, AX_L, AX_H, AY_L, AY_H, AZ_L, AZ_H
+// [16-21]: Mag raw: MX_H, MX_L, MY_H, MY_L, MZ_H, MZ_L (Big Endian)
+// [22-25]: Baro: Pressure (4 bytes, float raw)
+// [26-27]: ToF Distance: mm (2 bytes, Big Endian)
+// [28-29]: Reserved
+#define PACKET_BYTES 30
 #define IMU_DATA_BYTES 12
 #define MAG_DATA_BYTES 6
+#define BARO_DATA_BYTES 4
+#define TOF_DATA_BYTES 2
 
 // ISM330DHCX Sensitivities
 #define ISM330_SENS_16G     (0.488f / 1000.0f * 9.81f)  // mg/LSB -> m/s²
 #define ISM330_SENS_2000DPS (70.0f / 1000.0f * 0.0174533f)  // mdps/LSB -> rad/s
 
-// MMC5983MA Sensitivity (±8G = 16G range, 16-bit = 65536 counts)
-// 1 LSB = 16G / 65536 ≈ 0.000244 Gauss = 0.0244 uT
+// MMC5983MA Sensitivity
 #define MMC5983_OFFSET 32768
 #define MMC5983_SENS_UT (0.0244f)
 
@@ -254,6 +258,14 @@ private:
             uint16_t my_raw = ((uint16_t)rx[18] << 8) | rx[19];
             uint16_t mz_raw = ((uint16_t)rx[20] << 8) | rx[21];
             
+            // Parse Baro: Pressure (4 bytes, float raw bits transmitted Big Endian)
+            uint32_t p_raw = ((uint32_t)rx[22] << 24) | ((uint32_t)rx[23] << 16) | 
+                             ((uint32_t)rx[24] << 8) | rx[25];
+            float pressure = *reinterpret_cast<float*>(&p_raw);
+            
+            // Parse ToF: Distance in mm (Big Endian)
+            uint16_t distance_mm = ((uint16_t)rx[26] << 8) | rx[27];
+            
             // Convert to physical units
             float gyro[3] = {
                 (float)gx * ISM330_SENS_2000DPS,
@@ -273,14 +285,15 @@ private:
             
             static int log_cnt = 0;
             if (log_cnt++ % 10 == 0) {
-                 RCLCPP_INFO(this->get_logger(), "A:[%.2f,%.2f,%.2f] G:[%.2f,%.2f,%.2f] M:[%.1f,%.1f,%.1f]",
+                 RCLCPP_INFO(this->get_logger(), "A:[%.2f,%.2f,%.2f] G:[%.2f,%.2f,%.2f] M:[%.1f,%.1f,%.1f] P:%.0f D:%d",
                              accel[0], accel[1], accel[2], gyro[0], gyro[1], gyro[2],
-                             mag[0], mag[1], mag[2]);
+                             mag[0], mag[1], mag[2], pressure, distance_mm);
             }
                         
-            // Publish [ax, ay, az, gx, gy, gz, mx, my, mz]
+            // Publish [ax, ay, az, gx, gy, gz, mx, my, mz, pressure, distance]
             std_msgs::msg::Float32MultiArray msg;
-            msg.data = {accel[0], accel[1], accel[2], gyro[0], gyro[1], gyro[2], mag[0], mag[1], mag[2]};
+            msg.data = {accel[0], accel[1], accel[2], gyro[0], gyro[1], gyro[2], 
+                        mag[0], mag[1], mag[2], pressure, (float)distance_mm};
             imu_pub_->publish(msg);
         } else {
              std::cerr << "Bad Header" << std::endl;
