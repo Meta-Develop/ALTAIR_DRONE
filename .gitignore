@@ -18,8 +18,6 @@ __pycache__/
 COLCON_IGNORE
 
 # Agent and Project Context
-PROJECT_TASKS.md
-PROJECT_CONSTRAINTS.md
 HANDOVER_CONTEXT.md
 task.md
 .agent/

@@ -31,83 +31,30 @@ static uint8_t get_crc8(uint8_t *data, uint8_t len) {
     return crc;
 }
 
-const uint telemetry_pins[NUM_ESC] = {12, 13, 14, 15, 20, 21};
+static uint offset;
 
-// We use PIO1 (remaining 2 SMs) and PIO2 (4 SMs) for Telemetry
-// Motors took PIO0(4) + PIO1(2, SM0/1).
-// So Telemetry gets PIO1(SM2/3) + PIO2(SM0/1/2/3).
-
-static bool pio1_prog_loaded = false;
-static bool pio2_prog_loaded = false;
-static uint pio1_offset = 0;
-static uint pio2_offset = 0;
-
-void telemetry_init(void) { // No args, manages its own PIOs
-    for (int i=0; i<NUM_ESC; i++) {
-        PIO current_pio;
-        uint sm;
-        uint offset;
-        
-        if (i < 2) {
-            // Telem 0, 1 -> PIO1 SM 2, 3
-            current_pio = pio1;
-            sm = 2 + i;
-            
-            if (!pio1_prog_loaded) {
-                pio1_offset = pio_add_program(pio1, &telemetry_program);
-                pio1_prog_loaded = true;
-            }
-            offset = pio1_offset;
-        } else {
-            // Telem 2..5 -> PIO2 SM 0..3
-            current_pio = pio2;
-            sm = i - 2;
-            
-            if (!pio2_prog_loaded) {
-                pio2_offset = pio_add_program(pio2, &telemetry_program);
-                pio2_prog_loaded = true;
-            }
-            offset = pio2_offset;
-        }
-
-        uint pin = telemetry_pins[i];
-        gpio_init(pin);
-        gpio_set_dir(pin, GPIO_IN);
-        gpio_pull_up(pin);
-        
-        telemetry_program_init(current_pio, sm, offset, pin);
+void telemetry_init(PIO pio, uint sm) {
+    offset = pio_add_program(pio, &telemetry_program);
+    // Initialize all pins as inputs first to be safe
+    for(int i=0; i<NUM_ESC; i++) {
+        gpio_init(TELEMETRY_PIN_START + i);
+        gpio_set_dir(TELEMETRY_PIN_START + i, GPIO_IN);
+        gpio_pull_up(TELEMETRY_PIN_START + i); // Idle High for UART
     }
 }
 
-float telemetry_read_rpm(uint motor_index) {
+float telemetry_read_rpm(PIO pio, uint sm, uint motor_index) {
     if (motor_index >= NUM_ESC) return 0.0f;
     
-    uint pin = telemetry_pins[motor_index];
+    uint pin = TELEMETRY_PIN_START + motor_index;
     
-    // Map index to PIO/SM (Must match init logic!)
-    PIO current_pio;
-    uint sm;
-    uint offset;
-    
-    if (motor_index < 2) {
-        current_pio = pio1;
-        sm = 2 + motor_index;
-        offset = pio1_offset; // Assumed loaded
-    } else {
-        current_pio = pio2;
-        sm = motor_index - 2;
-        offset = pio2_offset;
-    }
-    
-    // Re-init? No, just clear FIFO usually sufficient if continuous.
-    // DShot telemetry is "on request" usually, but here we scan?
-    // If we re-init every read, we might miss the start bit.
-    // Better to assume it's running.
-    // But `telemetry_program_init` sets the pin. We did that in init.
-    // So we just read the FIFO.
+    // 1. Reconfigure SM to listen to the specific pin
+    // We need to re-call init or just change the mapping.
+    // Calling init is safest to reset state.
+    telemetry_program_init(pio, sm, offset, pin);
     
     // 2. Clear FIFO
-    pio_sm_clear_fifos(current_pio, sm);
+    pio_sm_clear_fifos(pio, sm);
     
     // 3. Wait for data with timeout
     // Telemetry frame is 10 bytes.
@@ -121,10 +68,10 @@ float telemetry_read_rpm(uint motor_index) {
     while (bytes_read < 10) {
         if ((time_us_64() - start) > 3000) break; // 3ms timeout
         
-        if (!pio_sm_is_rx_fifo_empty(current_pio, sm)) {
+        if (!pio_sm_is_rx_fifo_empty(pio, sm)) {
             // PIO shifts right, so data enters at MSB.
             // After 8 bits, the byte is in the top 8 bits (31-24).
-            uint32_t val = pio_sm_get(current_pio, sm);
+            uint32_t val = pio_sm_get(pio, sm);
             buffer[bytes_read++] = (uint8_t)(val >> 24);
         }
     }

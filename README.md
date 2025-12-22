@@ -35,32 +35,15 @@ The electrical system is built around a 3-Node architecture:
 
 The system uses a specific network topology to isolate the control node (Node C) for low-latency performance.
 
-### IP Addresses
+## Network Configuration
 
-| Node                | Interface         | IP Address        | Note              |
-| :------------------ | :---------------- | :---------------- | :---------------- |
-| **Node B (RPi4_1)** | `wlan0` (WiFi)    | `192.168.137.xxx` | Dynamic (Hotspot) |
-|                     | `eth0` (Ethernet) | `192.168.10.1`    | Static Gateway    |
-|                     | Tailscale         | `100.105.97.114`  | `konnpi-1`        |
-| **Node C (RPi4_2)** | `eth0` (Ethernet) | `192.168.10.2`    | Static Client     |
-|                     | Tailscale         | `100.111.243.32`  | `konnpi2`         |
-|                     | `wlan0` (WiFi)    | **DISABLED**      | For performance   |
+> [!NOTE]
+> Specific IP addresses, device names, and connection details are **PRIVATE** and stored in `HANDOVER_CONTEXT.md`.
+> Do not modify this section to include sensitive information.
 
-### Connectivity Guide
-
-**1. Accessing Node C (Tailscale - Recommended)**
-Direct access via VPN (works from PC).
-
-```bash
-ssh konn@100.111.243.32
-```
-
-**2. Accessing Node C (Via Jump Host)**
-Tunnel through Node B if Tailscale is unavailable or for local checks.
-
-```bash
-ssh -J konn@100.105.97.114 konn@192.168.10.2
-```
+The system uses a specific network topology to isolate the control node (Node C) for low-latency performance.
+- **Node B**: Acts as Gateway and Bridge.
+- **Node C**: Acts as High-Level Controller (isolated).
 
 ## Directory Structure
 
