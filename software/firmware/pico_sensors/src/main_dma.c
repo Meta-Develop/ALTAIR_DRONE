@@ -52,9 +52,9 @@ void cs_irq_handler(uint gpio, uint32_t events) {
         pio_sm_put(pio, sm, 0xFF); 
         pio_sm_put(pio, sm, 0xFF); 
         
-        // 4. DMA the rest
-        dma_channel_set_trans_count(dma_tx, TOTAL_SIZE - 4, false);
-        dma_channel_set_read_addr(dma_tx, tx_buffer + 4, true);
+        // 4. DMA the rest (DISABLED FOR DEBUG)
+        // dma_channel_set_trans_count(dma_tx, TOTAL_SIZE - 4, false);
+        // dma_channel_set_read_addr(dma_tx, tx_buffer + 4, true);
         
         // 5. Enable PIO (Wait for SCK)
         busy_wait_us_32(2); 
