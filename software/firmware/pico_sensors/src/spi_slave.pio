@@ -20,7 +20,10 @@ public entry_point:
     ; For now: use RIGHT shift and accept LSB-first for testing.
     pull block      
     
-    ; Output Bit 0 (first bit) immediately - this is the "setup" before first SCK rise
+    ; Output Bit 0 (first bit) immediately
+    ; Force pin direction to OUTPUT (1) for 1 pin starting at 'set' base (mapped to MISO)
+    set pindirs, 1
+    
     out pins, 1
     
     ; Loop for remaining 7 bits
@@ -48,6 +51,9 @@ static inline void spi_slave_init(PIO pio, uint sm, uint offset, uint pin_miso) 
     
     // Set OUT pin (MISO)
     sm_config_set_out_pins(&c, pin_miso, 1);
+    
+    // Set SET pin (MISO) for 'set pindirs' instruction
+    sm_config_set_set_pins(&c, pin_miso, 1);
     
     // Init GPIO for MISO
     pio_gpio_init(pio, pin_miso);
