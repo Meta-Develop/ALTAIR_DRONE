@@ -22,10 +22,11 @@ target_link_libraries(pico_sensors
 pico_enable_stdio_usb(pico_sensors 1)
 pico_add_extra_outputs(pico_sensors)
 
-# 2. High-Performance DMA Firmware (with Real Sensor Reading)
+# 2. High-Performance DMA Firmware (with 9DoF Sensors)
 add_executable(pico_sensors_dma 
     src/main_dma.c
     src/drivers/ism330dhcx.c
+    src/drivers/mmc5983ma.c
 )
 target_include_directories(pico_sensors_dma PRIVATE src src/drivers)
 target_link_libraries(pico_sensors_dma 

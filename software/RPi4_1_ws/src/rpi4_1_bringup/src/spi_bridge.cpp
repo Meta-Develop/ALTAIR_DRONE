@@ -12,8 +12,22 @@
 #include <pthread.h>
 #include <sched.h> 
 
-#define PAYLOAD_FLOATS 24
-#define PAYLOAD_BYTES (PAYLOAD_FLOATS * sizeof(float)) // 96 bytes
+// 9DoF 22-byte Packet Format:
+// [0-3]: Header AA BB CC DD
+// [4-15]: IMU raw: GX_L, GX_H, GY_L, GY_H, GZ_L, GZ_H, AX_L, AX_H, AY_L, AY_H, AZ_L, AZ_H
+// [16-21]: Mag raw: MX_H, MX_L, MY_H, MY_L, MZ_H, MZ_L (Big Endian from sensor)
+#define PACKET_BYTES 22
+#define IMU_DATA_BYTES 12
+#define MAG_DATA_BYTES 6
+
+// ISM330DHCX Sensitivities
+#define ISM330_SENS_16G     (0.488f / 1000.0f * 9.81f)  // mg/LSB -> m/s²
+#define ISM330_SENS_2000DPS (70.0f / 1000.0f * 0.0174533f)  // mdps/LSB -> rad/s
+
+// MMC5983MA Sensitivity (±8G = 16G range, 16-bit = 65536 counts)
+// 1 LSB = 16G / 65536 ≈ 0.000244 Gauss = 0.0244 uT
+#define MMC5983_OFFSET 32768
+#define MMC5983_SENS_UT (0.0244f)
 
 // Header: 0xAABBCCDD
 static const uint8_t HEADER[4] = {0xAA, 0xBB, 0xCC, 0xDD};
@@ -161,8 +175,8 @@ private:
         pfd.fd = gpio_ready_->get_fd();
         pfd.events = POLLPRI; // Interrupt
 
-        std::vector<uint8_t> rx(PAYLOAD_BYTES + 4); 
-        std::vector<uint8_t> tx(PAYLOAD_BYTES + 4, 0);
+        std::vector<uint8_t> rx(PACKET_BYTES); 
+        std::vector<uint8_t> tx(PACKET_BYTES, 0);
 
         // Dummy read to clear initial state
         gpio_ready_->clear_interrupt();
@@ -222,30 +236,53 @@ private:
     }
 
     void processData(const std::vector<uint8_t>& rx) {
-        // Force log to stderr every time for debugging
-        // Use std::cerr to avoid buffering
         std::cerr << "RX[0-3]: " 
                   << std::hex << (int)rx[0] << " " << (int)rx[1] << " " 
                   << (int)rx[2] << " " << (int)rx[3] << std::dec << std::endl;
 
-        // Expected layout after 4-byte header (0xAABBCCDD):
-        // floats[0]=counter, ...
         if (rx[0] == HEADER[0] && rx[1] == HEADER[1] && rx[2] == HEADER[2] && rx[3] == HEADER[3]) {
-            // Interpret payload as floats
-            const float* payload = reinterpret_cast<const float*>(rx.data() + 4);
+            // Parse IMU (Little Endian): GX, GY, GZ, AX, AY, AZ
+            int16_t gx = (int16_t)(rx[4] | (rx[5] << 8));
+            int16_t gy = (int16_t)(rx[6] | (rx[7] << 8));
+            int16_t gz = (int16_t)(rx[8] | (rx[9] << 8));
+            int16_t ax = (int16_t)(rx[10] | (rx[11] << 8));
+            int16_t ay = (int16_t)(rx[12] | (rx[13] << 8));
+            int16_t az = (int16_t)(rx[14] | (rx[15] << 8));
             
-            // Log full data less frequently
+            // Parse Mag (Big Endian): MX, MY, MZ
+            uint16_t mx_raw = ((uint16_t)rx[16] << 8) | rx[17];
+            uint16_t my_raw = ((uint16_t)rx[18] << 8) | rx[19];
+            uint16_t mz_raw = ((uint16_t)rx[20] << 8) | rx[21];
+            
+            // Convert to physical units
+            float gyro[3] = {
+                (float)gx * ISM330_SENS_2000DPS,
+                (float)gy * ISM330_SENS_2000DPS,
+                (float)gz * ISM330_SENS_2000DPS
+            };
+            float accel[3] = {
+                (float)ax * ISM330_SENS_16G,
+                (float)ay * ISM330_SENS_16G,
+                (float)az * ISM330_SENS_16G
+            };
+            float mag[3] = {
+                ((float)((int16_t)(mx_raw - MMC5983_OFFSET))) * MMC5983_SENS_UT,
+                ((float)((int16_t)(my_raw - MMC5983_OFFSET))) * MMC5983_SENS_UT,
+                ((float)((int16_t)(mz_raw - MMC5983_OFFSET))) * MMC5983_SENS_UT
+            };
+            
             static int log_cnt = 0;
             if (log_cnt++ % 10 == 0) {
-                 std::cerr << "Valid Data! Cnt: " << payload[0] << std::endl;
-                 RCLCPP_INFO(this->get_logger(), "F: Cnt:%.0f ...", payload[0]);
+                 RCLCPP_INFO(this->get_logger(), "A:[%.2f,%.2f,%.2f] G:[%.2f,%.2f,%.2f] M:[%.1f,%.1f,%.1f]",
+                             accel[0], accel[1], accel[2], gyro[0], gyro[1], gyro[2],
+                             mag[0], mag[1], mag[2]);
             }
                         
+            // Publish [ax, ay, az, gx, gy, gz, mx, my, mz]
             std_msgs::msg::Float32MultiArray msg;
-            msg.data.assign(payload, payload + PAYLOAD_FLOATS);
+            msg.data = {accel[0], accel[1], accel[2], gyro[0], gyro[1], gyro[2], mag[0], mag[1], mag[2]};
             imu_pub_->publish(msg);
         } else {
-             // Log bad header every time to confirm data flow
              std::cerr << "Bad Header" << std::endl;
         }
     }
