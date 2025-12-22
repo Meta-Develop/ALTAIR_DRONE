@@ -275,7 +275,7 @@ int main() {
         }
 
         // --- 7. Re-arm CS IRQ ---
-        if (now - last_rearm > 500) { 
+        // if (now - last_rearm > 500) { 
             if (gpio_get(PIN_CS_SLAVE)) { 
                 gpio_set_irq_enabled(PIN_CS_SLAVE, GPIO_IRQ_EDGE_FALL, true);
                 last_rearm = now;
@@ -285,7 +285,7 @@ int main() {
                 // For now, always signal after re-arm to keep the loop valid.
                 gpio_put(PIN_DATA_READY, 1);
             }
-        }
+        // }
         sleep_us(50);
     }
 }
