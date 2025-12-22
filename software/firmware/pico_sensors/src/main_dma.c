@@ -24,6 +24,7 @@
 #define PIN_MISO    19       // GP19 (Pin 25)
 #define PIN_CS      17       // GP17 (Pin 22)
 #define PIN_SCK     18       // GP18 (Pin 24)
+#define PIN_MOSI    16       // GP16 (Pin 21)
 #define PIN_LED     25       // Onboard LED
 
 // Globals
@@ -91,6 +92,14 @@ int main() {
     
     // --- CRITICAL: FORCE PIO PIN DIRECTION (Backup for PIO set pindirs) ---
     pio_sm_set_consecutive_pindirs(pio, sm, PIN_MISO, 1, true); 
+
+    // --- CRITICAL: INPUT INIT FOR SCK/MOSI ---
+    gpio_init(PIN_SCK);
+    gpio_set_dir(PIN_SCK, GPIO_IN);
+    // gpio_pull_down(PIN_SCK); // Master drives it, but safe default
+    
+    gpio_init(PIN_MOSI);
+    gpio_set_dir(PIN_MOSI, GPIO_IN); 
 
     // DMA Init
     dma_tx = dma_claim_unused_channel(true);
