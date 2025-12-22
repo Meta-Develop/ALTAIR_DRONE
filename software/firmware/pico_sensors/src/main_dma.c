@@ -290,20 +290,5 @@ int main() {
         while (!pio_sm_is_rx_fifo_empty(pio, sm)) {
             pio_sm_get(pio, sm);
         }
-
-        // Heartbeat LED (1Hz blink)
-        uint32_t now = time_us_32();
-        if (now - last_heartbeat > 500000) {
-            gpio_put(PIN_LED, !gpio_get(PIN_LED));
-            last_heartbeat = now;
-        }
-
-        // Rate check (every second, print actual rate)
-        if (now - last_rate_check > 1000000) {
-            uint32_t delta = sample_count - last_sample_count;
-            // printf("[MAIN] Sample rate: %lu Hz\n", delta); // Disable print to avoid USB lag?
-            last_sample_count = sample_count;
-            last_rate_check = now;
-        }
     }
 }
