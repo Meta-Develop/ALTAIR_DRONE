@@ -2,6 +2,11 @@
  * Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
  *
  * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * SPI SLAVE FIRMWARE (FIXED PIO DRIVER)
+ * - Uses PIO instructions to set pindirs (set pindirs, 1) to ensure MISO drive.
+ * - Uses CS IRQ to resync byte streams.
+ * - Sends 0xFF header for easy oscilloscope/software debug verification.
  */
 
 #include <stdio.h>
@@ -44,15 +49,23 @@ void cs_irq_handler(uint gpio, uint32_t events) {
         dma_channel_abort(dma_tx);
         pio_sm_clear_fifos(pio, sm);
         pio_sm_restart(pio, sm);
+        // Execute offset jump to reset PC
         pio_sm_exec(pio, sm, pio_encode_jmp(offset + spi_slave_offset_entry_point));
         
-        // 3. Pre-fill Header (ALL ONES for Debug persistence)
+        // 3. Pre-fill Header (0xFF for Debug Visibility)
         pio_sm_put(pio, sm, 0xFF); 
         pio_sm_put(pio, sm, 0xFF); 
         pio_sm_put(pio, sm, 0xFF); 
         pio_sm_put(pio, sm, 0xFF); 
         
-    // cs_irq_handler logic is unused in this test mode
+        // 4. DMA the rest
+        dma_channel_set_trans_count(dma_tx, TOTAL_SIZE - 4, false);
+        dma_channel_set_read_addr(dma_tx, tx_buffer + 4, true);
+        
+        // 5. Enable PIO (Sets pindirs and waits for SCK)
+        // Wait minor cycles to ensure FIFO stable
+        busy_wait_us_32(2); 
+        pio_sm_set_enabled(pio, sm, true);
     }
 }
 
@@ -70,13 +83,13 @@ int main() {
     tx_buffer[0] = 0xAA; tx_buffer[1] = 0xBB; tx_buffer[2] = 0xCC; tx_buffer[3] = 0xDD;
     for (int i = 4; i < TOTAL_SIZE; i++) tx_buffer[i] = (uint8_t)(i - 3);
 
-    printf("Pico SPI Slave DMA (Fixed)\n");
+    printf("Pico SPI Slave DMA (PIO Pindirs Fix)\n");
 
     // PIO Init
     offset = pio_add_program(pio, &spi_slave_program);
     spi_slave_init(pio, sm, offset, PIN_MISO);
     
-    // --- CRITICAL: FORCE PIO PIN DIRECTION AGAIN ---
+    // --- CRITICAL: FORCE PIO PIN DIRECTION (Backup for PIO set pindirs) ---
     pio_sm_set_consecutive_pindirs(pio, sm, PIN_MISO, 1, true); 
 
     // DMA Init
@@ -89,19 +102,12 @@ int main() {
 
     dma_channel_configure(dma_tx, &c, &pio->txf[sm], tx_buffer + 4, 0, false);
     
-    // --- PIO DRIVER TEST MODE ---
-    // Enable PIO immediately to verify hardware driver
-    pio_sm_set_enabled(pio, sm, true);
-    printf("[MAIN] PIO Enabled for continuous blink test (IRQ Disabled).\n");
-    
-    // CS IRQ Init (DISABLED for Blink Test)
-    /*
+    // CS IRQ Init
     gpio_init(PIN_CS);
     gpio_set_dir(PIN_CS, GPIO_IN);
     gpio_pull_up(PIN_CS); 
     gpio_set_irq_enabled_with_callback(PIN_CS, GPIO_IRQ_EDGE_FALL, true, &cs_irq_handler);
-    printf("[MAIN] CS IRQ Enabled.\n");
-    */
+    printf("[MAIN] CS IRQ Enabled. MISO should be 0xFF (High) during xfer.\n");
     
     uint32_t last_rearm = 0;
     

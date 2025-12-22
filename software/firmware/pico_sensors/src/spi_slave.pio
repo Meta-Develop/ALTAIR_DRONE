@@ -13,9 +13,30 @@
 ; Entry point: PIO is reset here by C code on CS fall
 public entry_point:
 .wrap_target
+    ; Pull next byte. RIGHT shift.
+    pull block      
+    
+    ; Force pin direction to OUTPUT (1) mapped to MISO
     set pindirs, 1
-    set pins, 1 [31]
-    set pins, 0 [31]
+    
+    ; Output Bit 0 (first bit) immediately
+    out pins, 1
+    
+    ; Loop for remaining 7 bits
+    set x, 6
+bitloop:
+    ; Wait for SCK Rising Edge (Master samples)
+    wait 1 gpio 18
+    
+    ; Wait for SCK Falling Edge (Slave shifts)
+    wait 0 gpio 18
+    out pins, 1
+    
+    jmp x-- bitloop
+    
+    ; After 8 bits, wait for last SCK fall to complete
+    wait 1 gpio 18
+    wait 0 gpio 18
 .wrap
 
 % c-sdk {
