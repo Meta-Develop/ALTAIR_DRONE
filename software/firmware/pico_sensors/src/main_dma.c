@@ -29,6 +29,7 @@
 #define PIN_CS_SLAVE      17       // GP17 - Input from RPi4
 #define PIN_SCK_SLAVE     18       // GP18 - Input from RPi4
 #define PIN_MOSI_SLAVE    16       // GP16 - Input from RPi4
+#define PIN_DATA_READY    22       // GP22 - Output to RPi4 (Interrupt)
 
 // SPI1 Master (to 9DoF Sensors)
 #define PIN_MISO_SENSOR   12       // GP12 - Input from Sensors
@@ -70,6 +71,7 @@ bool tof_ok = false;
 // CS Falling Edge Interrupt Handler
 void cs_irq_handler(uint gpio, uint32_t events) {
     if (gpio == PIN_CS_SLAVE && (events & GPIO_IRQ_EDGE_FALL)) {
+        gpio_put(PIN_DATA_READY, 0); // Clear Data Ready Signal
         gpio_set_irq_enabled(PIN_CS_SLAVE, GPIO_IRQ_EDGE_FALL, false);
         gpio_xor_mask(1u << PIN_LED);
         irq_count++;
@@ -159,6 +161,11 @@ int main() {
     gpio_set_dir(PIN_SCK_SLAVE, GPIO_IN);
     gpio_init(PIN_MOSI_SLAVE);
     gpio_set_dir(PIN_MOSI_SLAVE, GPIO_IN); 
+
+    // Data Ready Init
+    gpio_init(PIN_DATA_READY);
+    gpio_set_dir(PIN_DATA_READY, GPIO_OUT);
+    gpio_put(PIN_DATA_READY, 0); 
 
     // DMA Init
     dma_tx = dma_claim_unused_channel(true);
@@ -274,6 +281,11 @@ int main() {
             if (gpio_get(PIN_CS_SLAVE)) { 
                 gpio_set_irq_enabled(PIN_CS_SLAVE, GPIO_IRQ_EDGE_FALL, true);
                 last_rearm = now;
+                
+                // Signal Data Ready (Rising Edge)
+                // Only signal if we have meaningful data? 
+                // For now, always signal after re-arm to keep the loop valid.
+                gpio_put(PIN_DATA_READY, 1);
             }
         }
         sleep_us(50);
