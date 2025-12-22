@@ -195,34 +195,31 @@ private:
     }
 
     void processData(const std::vector<uint8_t>& rx) {
-        // DEBUG: Log first 8 bytes every 100th read
-        static int debug_cnt = 0;
-        if (debug_cnt++ % 100 == 0) {
-            RCLCPP_INFO(this->get_logger(), "RX[0-7]: %02X %02X %02X %02X %02X %02X %02X %02X",
-                rx[0], rx[1], rx[2], rx[3], rx[4], rx[5], rx[6], rx[7]);
-        }
+        // Force log to stderr every time for debugging
+        // Use std::cerr to avoid buffering
+        std::cerr << "RX[0-3]: " 
+                  << std::hex << (int)rx[0] << " " << (int)rx[1] << " " 
+                  << (int)rx[2] << " " << (int)rx[3] << std::dec << std::endl;
 
         // Expected layout after 4-byte header (0xAABBCCDD):
-        // floats[0]=counter, [1]=temp, [2-4]=accel, [5-7]=gyro, [8-10]=mag
+        // floats[0]=counter, ...
         if (rx[0] == HEADER[0] && rx[1] == HEADER[1] && rx[2] == HEADER[2] && rx[3] == HEADER[3]) {
             // Interpret payload as floats
-            // Offset 4 bytes (Header) -> Start of Floats
             const float* payload = reinterpret_cast<const float*>(rx.data() + 4);
             
-            RCLCPP_INFO(this->get_logger(), "F: Cnt:%.0f T:%.1f A:[%.2f %.2f %.2f] G:[%.2f %.2f %.2f]",
-                        payload[0], payload[1],
-                        payload[2], payload[3], payload[4],
-                        payload[5], payload[6], payload[7]);
+            // Log full data less frequently
+            static int log_cnt = 0;
+            if (log_cnt++ % 10 == 0) {
+                 std::cerr << "Valid Data! Cnt: " << payload[0] << std::endl;
+                 RCLCPP_INFO(this->get_logger(), "F: Cnt:%.0f ...", payload[0]);
+            }
                         
             std_msgs::msg::Float32MultiArray msg;
-            // Copy floats from payload to msg.data
             msg.data.assign(payload, payload + PAYLOAD_FLOATS);
             imu_pub_->publish(msg);
         } else {
-             static int err_cnt = 0;
-             if (err_cnt++ % 100 == 0) {
-                 RCLCPP_WARN(this->get_logger(), "Bad Header: %02X %02X", rx[0], rx[1]);
-             }
+             // Log bad header every time to confirm data flow
+             std::cerr << "Bad Header" << std::endl;
         }
     }
 
