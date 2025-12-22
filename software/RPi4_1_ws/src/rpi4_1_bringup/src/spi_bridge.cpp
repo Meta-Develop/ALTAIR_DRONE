@@ -174,15 +174,15 @@ private:
              // std::cerr << "Polling..." << std::endl;
              int ret = poll(&pfd, 1, 100); // 100ms timeout
              if (ret > 0 && (pfd.revents & POLLPRI)) {
-                // std::cerr << "Interrupt received!" << std::endl;
+                std::cerr << "Interrupt received!" << std::endl;
                 gpio_ready_->clear_interrupt();
                 performRead(tx, rx);
              } else if (ret == 0) {
                  // Timeout - send a heartbeat/kickstart?
-                 // std::cerr << "Poll Timeout." << std::endl;
+                 std::cerr << "Poll Timeout." << std::endl;
              } else {
                  // Error
-                 // std::cerr << "Poll Error: " << ret << std::endl;
+                 std::cerr << "Poll Error: " << ret << std::endl;
              }
         }
     }
