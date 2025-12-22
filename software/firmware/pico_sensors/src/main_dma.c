@@ -46,11 +46,11 @@ void cs_irq_handler(uint gpio, uint32_t events) {
         pio_sm_restart(pio, sm);
         pio_sm_exec(pio, sm, pio_encode_jmp(offset + spi_slave_offset_entry_point));
         
-        // 3. Pre-fill Header (AA BB CC DD)
-        pio_sm_put(pio, sm, tx_buffer[0]); 
-        pio_sm_put(pio, sm, tx_buffer[1]); 
-        pio_sm_put(pio, sm, tx_buffer[2]); 
-        pio_sm_put(pio, sm, tx_buffer[3]); 
+        // 3. Pre-fill Header (ALL ONES for Debug persistence)
+        pio_sm_put(pio, sm, 0xFF); 
+        pio_sm_put(pio, sm, 0xFF); 
+        pio_sm_put(pio, sm, 0xFF); 
+        pio_sm_put(pio, sm, 0xFF); 
         
         // 4. DMA the rest
         dma_channel_set_trans_count(dma_tx, TOTAL_SIZE - 4, false);
