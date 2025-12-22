@@ -55,10 +55,10 @@ static inline void spi_slave_init(PIO pio, uint sm, uint offset, uint pin_miso) 
     pio_gpio_init(pio, pin_miso);
     pio_sm_set_consecutive_pindirs(pio, sm, pin_miso, 1, true); // Output
     
-    // Shift config: RIGHT shift (data in LSB), no autopull, 8 bits
-    // DMA writes 8-bit to 32-bit FIFO, data ends up in lowest byte
-    // Right shift pulls from LSB, so we get our data immediately
-    sm_config_set_out_shift(&c, true, false, 8);
+    // Shift config: LEFT shift (MSB first), no autopull, 32 bits
+    // We provide 32-bit words with data in MSB (e.g., 0xAA000000)
+    // 'out' instruction consumes from MSB (31) and shifts OSR left
+    sm_config_set_out_shift(&c, false, false, 32);
     
     // Run at full system clock
     sm_config_set_clkdiv(&c, 1.0f);
