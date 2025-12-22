@@ -8,9 +8,10 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 
 add_executable(spi_bridge_cpp src/spi_bridge.cpp)
-ament_target_dependencies(spi_bridge_cpp rclcpp std_msgs)
+ament_target_dependencies(spi_bridge_cpp rclcpp std_msgs sensor_msgs)
 
 install(TARGETS
   spi_bridge_cpp

@@ -1,5 +1,8 @@
 #include <rclcpp/rclcpp.hpp>
-#include <std_msgs/msg/float32_multi_array.hpp>
+#include <sensor_msgs/msg/imu.hpp>
+#include <sensor_msgs/msg/magnetic_field.hpp>
+#include <sensor_msgs/msg/fluid_pressure.hpp>
+#include <sensor_msgs/msg/range.hpp>
 #include <vector>
 #include <cstring>
 #include <iostream>
@@ -20,10 +23,6 @@
 // [26-27]: ToF Distance: mm (2 bytes, Big Endian)
 // [28-29]: Reserved
 #define PACKET_BYTES 30
-#define IMU_DATA_BYTES 12
-#define MAG_DATA_BYTES 6
-#define BARO_DATA_BYTES 4
-#define TOF_DATA_BYTES 2
 
 // ISM330DHCX Sensitivities
 #define ISM330_SENS_16G     (0.488f / 1000.0f * 9.81f)  // mg/LSB -> m/s²
@@ -32,6 +31,7 @@
 // MMC5983MA Sensitivity
 #define MMC5983_OFFSET 32768
 #define MMC5983_SENS_UT (0.0244f)
+#define MMC5983_SENS_TESLA (MMC5983_SENS_UT / 1000000.0f) // uT -> Tesla
 
 // Header: 0xAABBCCDD
 static const uint8_t HEADER[4] = {0xAA, 0xBB, 0xCC, 0xDD};
@@ -39,14 +39,14 @@ static const uint8_t HEADER[4] = {0xAA, 0xBB, 0xCC, 0xDD};
 class SysfsGPIO {
 public:
     SysfsGPIO(int pin, bool input) : pin_(pin) {
-        // 1. Try to Unexport first to clear any stale state
+        // 1. Try to Unexport first
         int fd_un = open("/sys/class/gpio/unexport", O_WRONLY);
         if (fd_un >= 0) {
             std::string s = std::to_string(pin);
             write(fd_un, s.c_str(), s.length());
             close(fd_un);
         }
-        usleep(100000); // Wait 100ms for cleanup
+        usleep(100000); 
 
         // 2. Export
         int fd = open("/sys/class/gpio/export", O_WRONLY);
@@ -56,11 +56,11 @@ public:
             close(fd);
         }
         
-        // 3. Wait for filesystem to create the gpio directory (up to 1s)
+        // 3. Wait for filesystem
         std::string path_dir = "/sys/class/gpio/gpio" + std::to_string(pin) + "/direction";
         int retries = 0;
         while (access(path_dir.c_str(), F_OK) == -1 && retries < 10) {
-            usleep(100000); // 100ms
+            usleep(100000); 
             retries++;
         }
 
@@ -70,33 +70,25 @@ public:
             if (input) write(fd, "in", 2);
             else       write(fd, "out", 3);
             close(fd);
-        } else {
-             std::cerr << "Failed to open GPIO Direction: " << path_dir << std::endl;
         }
-
-        // 5. Edge (for Interrupts)
+        
+        // 5. Edge
         if (input) {
             std::string path_edge = "/sys/class/gpio/gpio" + std::to_string(pin) + "/edge";
             fd = open(path_edge.c_str(), O_WRONLY);
             if (fd >= 0) {
-                write(fd, "rising", 6); // Trigger on Rising Edge (Data Ready)
+                write(fd, "rising", 6); 
                 close(fd);
-            } else {
-                 std::cerr << "Failed to open GPIO Edge: " << path_edge << std::endl;
             }
         }
 
         // 6. Value FD (Keep open)
         std::string path_val = "/sys/class/gpio/gpio" + std::to_string(pin) + "/value";
         fd_ = open(path_val.c_str(), O_RDWR);
-        if (fd_ < 0) {
-             std::cerr << "Failed to open GPIO Value: " << path_val << std::endl;
-        }
     }
 
     ~SysfsGPIO() { 
         if (fd_ >= 0) close(fd_); 
-        // Optional: unexport on destruction? Better to leave it exported to avoid thrashing.
     }
 
     int get_fd() const { return fd_; }
@@ -124,42 +116,35 @@ private:
 class SpiBridgeNode : public rclcpp::Node {
 public:
     SpiBridgeNode() : Node("spi_bridge_node") {
-        imu_pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>("/pico/imu_batch", 10);
+        // Messages Publishers
+        imu_pub_ = this->create_publisher<sensor_msgs::msg::Imu>("/pico/imu", 10);
+        mag_pub_ = this->create_publisher<sensor_msgs::msg::MagneticField>("/pico/mag", 10);
+        baro_pub_ = this->create_publisher<sensor_msgs::msg::FluidPressure>("/pico/pressure", 10);
+        tof_pub_ = this->create_publisher<sensor_msgs::msg::Range>("/pico/TOF", 10);
         
-        // Pin 31 (GPIO 6) = Data Ready Input
+        // GPIO & SPI setup
         gpio_ready_ = std::make_unique<SysfsGPIO>(6, true);
-
-        // Pin 29 (GPIO 5) = Manual CS Output
-        // Initialize HIGH (Idle)
         gpio_cs_ = std::make_unique<SysfsGPIO>(5, false);
         gpio_cs_->setValue(1);
         
-        // SPI0
         spi_fd_ = open("/dev/spidev0.0", O_RDWR);
         if (spi_fd_ < 0) RCLCPP_ERROR(this->get_logger(), "SPI Open Failed");
         
         uint32_t speed = 8000000; // 8MHz
         uint8_t mode = 0;
         uint8_t bits = 8;
-        // NOTE: We use Manual CS (GPIO 5), ignoring whatever CE0 does.
-        // Even if kernel toggles CE0 (connected to nowhere), our GPIO 5 controls the Pico.
-        
         ioctl(spi_fd_, SPI_IOC_WR_MODE, &mode);
         ioctl(spi_fd_, SPI_IOC_WR_BITS_PER_WORD, &bits);
         ioctl(spi_fd_, SPI_IOC_WR_MAX_SPEED_HZ, &speed);
 
-        // Core Affinity (Core 3)
+        // Core 3 Affinity
         cpu_set_t cpuset;
         CPU_ZERO(&cpuset);
         CPU_SET(3, &cpuset);
         pthread_t current_thread = pthread_self();
-        if (pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset) != 0) {
-            RCLCPP_ERROR(this->get_logger(), "Failed to set Core 3 affinity");
-        } else {
-            RCLCPP_INFO(this->get_logger(), "Locked to Core 3");
-        }
+        pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
 
-        // Start Polling Thread
+        // Start Poll Loop
         running_ = true;
         poll_thread_ = std::thread(&SpiBridgeNode::pollLoop, this);
     }
@@ -172,49 +157,37 @@ public:
 
 private:
     void pollLoop() {
-        fprintf(stderr, "Trace: pollLoop started\n");
-        fflush(stderr);
-
         struct pollfd pfd;
         pfd.fd = gpio_ready_->get_fd();
-        pfd.events = POLLPRI; // Interrupt
+        pfd.events = POLLPRI; 
 
         std::vector<uint8_t> rx(PACKET_BYTES); 
         std::vector<uint8_t> tx(PACKET_BYTES, 0);
 
-        // Dummy read to clear initial state
         gpio_ready_->clear_interrupt();
 
-        // KICKSTART DEADLOCK CHECK
-        if (gpio_ready_->get_fd() >= 0) {
-            lseek(gpio_ready_->get_fd(), 0, SEEK_SET);
-            char val_buf[2] = {0};
-            read(gpio_ready_->get_fd(), val_buf, 2);
-            if (val_buf[0] == '1') {
-                 fprintf(stderr, "Trace: Startup Line HIGH, kickstarting\n");
-                 performRead(tx, rx);
-            }
+        // Check initial state
+        lseek(gpio_ready_->get_fd(), 0, SEEK_SET);
+        char val_buf[2] = {0};
+        read(gpio_ready_->get_fd(), val_buf, 2);
+        if (val_buf[0] == '1') {
+             performRead(tx, rx);
         }
         
-        fprintf(stderr, "Trace: pollLoop entering while\n");
-        fflush(stderr);
-
         while (running_ && rclcpp::ok()) {
-            fprintf(stderr, "Trace: Calling performRead\n");
-            fflush(stderr);
-            performRead(tx, rx);
-            usleep(100000);  // 100ms between reads
+             // Blocking poll
+             int ret = poll(&pfd, 1, 100); // 100ms timeout
+             if (ret > 0 && (pfd.revents & POLLPRI)) {
+                gpio_ready_->clear_interrupt();
+                performRead(tx, rx);
+             } else if (ret == 0) {
+                 // Timeout, just check again
+             }
         }
-        fprintf(stderr, "Trace: pollLoop exited\n");
     }
 
     void performRead(std::vector<uint8_t>& tx, std::vector<uint8_t>& rx) {
-         std::cerr << "Trace: performRead start" << std::endl;
-         
-         // Manual CS Assert (GPIO 5)
          gpio_cs_->setValue(0);
-         
-         // Setup Delay: 50us
          usleep(50); 
          
          struct spi_ioc_transfer tr;
@@ -222,28 +195,18 @@ private:
          tr.tx_buf = (unsigned long)tx.data();
          tr.rx_buf = (unsigned long)rx.data();
          tr.len = rx.size();
-         // 1MHz Target Speed
          tr.speed_hz = 1000000; 
          tr.bits_per_word = 8;
          
-         std::cerr << "Trace: calling ioctl" << std::endl;
-         int ret = ioctl(spi_fd_, SPI_IOC_MESSAGE(1), &tr);
-         std::cerr << "Trace: ioctl returned " << ret << std::endl;
+         ioctl(spi_fd_, SPI_IOC_MESSAGE(1), &tr);
          
-         // Manual CS Deassert (GPIO 5)
          gpio_cs_->setValue(1);
-         
-         // Post-Transaction Delay: 6ms for Pico Re-arm
-         usleep(6000);
+         usleep(6000); // Post-transaction delay for PIO re-arm
          
          processData(rx);
     }
 
     void processData(const std::vector<uint8_t>& rx) {
-        std::cerr << "RX[0-3]: " 
-                  << std::hex << (int)rx[0] << " " << (int)rx[1] << " " 
-                  << (int)rx[2] << " " << (int)rx[3] << std::dec << std::endl;
-
         if (rx[0] == HEADER[0] && rx[1] == HEADER[1] && rx[2] == HEADER[2] && rx[3] == HEADER[3]) {
             // Parse IMU (Little Endian): GX, GY, GZ, AX, AY, AZ
             int16_t gx = (int16_t)(rx[4] | (rx[5] << 8));
@@ -258,15 +221,15 @@ private:
             uint16_t my_raw = ((uint16_t)rx[18] << 8) | rx[19];
             uint16_t mz_raw = ((uint16_t)rx[20] << 8) | rx[21];
             
-            // Parse Baro: Pressure (4 bytes, float raw bits transmitted Big Endian)
+            // Parse Baro
             uint32_t p_raw = ((uint32_t)rx[22] << 24) | ((uint32_t)rx[23] << 16) | 
                              ((uint32_t)rx[24] << 8) | rx[25];
             float pressure = *reinterpret_cast<float*>(&p_raw);
             
-            // Parse ToF: Distance in mm (Big Endian)
+            // Parse ToF
             uint16_t distance_mm = ((uint16_t)rx[26] << 8) | rx[27];
             
-            // Convert to physical units
+            // Physical Units
             float gyro[3] = {
                 (float)gx * ISM330_SENS_2000DPS,
                 (float)gy * ISM330_SENS_2000DPS,
@@ -277,26 +240,62 @@ private:
                 (float)ay * ISM330_SENS_16G,
                 (float)az * ISM330_SENS_16G
             };
+            // Mag in Tesla
             float mag[3] = {
-                ((float)((int16_t)(mx_raw - MMC5983_OFFSET))) * MMC5983_SENS_UT,
-                ((float)((int16_t)(my_raw - MMC5983_OFFSET))) * MMC5983_SENS_UT,
-                ((float)((int16_t)(mz_raw - MMC5983_OFFSET))) * MMC5983_SENS_UT
+                ((float)((int16_t)(mx_raw - MMC5983_OFFSET))) * MMC5983_SENS_TESLA,
+                ((float)((int16_t)(my_raw - MMC5983_OFFSET))) * MMC5983_SENS_TESLA,
+                ((float)((int16_t)(mz_raw - MMC5983_OFFSET))) * MMC5983_SENS_TESLA
             };
             
+            rclcpp::Time now = this->get_clock()->now();
+
+            // 1. Publish IMU
+            sensor_msgs::msg::Imu imu_msg;
+            imu_msg.header.stamp = now;
+            imu_msg.header.frame_id = "pico_imu_link";
+            imu_msg.linear_acceleration.x = accel[0];
+            imu_msg.linear_acceleration.y = accel[1];
+            imu_msg.linear_acceleration.z = accel[2];
+            imu_msg.angular_velocity.x = gyro[0];
+            imu_msg.angular_velocity.y = gyro[1];
+            imu_msg.angular_velocity.z = gyro[2];
+            imu_msg.orientation_covariance[0] = -1.0; // Orientation not available
+            imu_pub_->publish(imu_msg);
+
+            // 2. Publish Mag
+            sensor_msgs::msg::MagneticField mag_msg;
+            mag_msg.header.stamp = now;
+            mag_msg.header.frame_id = "pico_mag_link";
+            mag_msg.magnetic_field.x = mag[0];
+            mag_msg.magnetic_field.y = mag[1];
+            mag_msg.magnetic_field.z = mag[2];
+            mag_pub_->publish(mag_msg);
+
+            // 3. Publish Pressure
+            sensor_msgs::msg::FluidPressure baro_msg;
+            baro_msg.header.stamp = now;
+            baro_msg.header.frame_id = "pico_baro_link";
+            baro_msg.fluid_pressure = pressure;
+            baro_msg.variance = 0.0;
+            baro_pub_->publish(baro_msg);
+
+            // 4. Publish Range
+            sensor_msgs::msg::Range tof_msg;
+            tof_msg.header.stamp = now;
+            tof_msg.header.frame_id = "pico_tof_link";
+            tof_msg.radiation_type = sensor_msgs::msg::Range::INFRARED;
+            tof_msg.field_of_view = 0.44; // ~25 deg
+            tof_msg.min_range = 0.001;
+            tof_msg.max_range = 4.0;
+            tof_msg.range = (float)distance_mm / 1000.0f;
+            tof_pub_->publish(tof_msg);
+            
+            // Console Logging (Decimated)
             static int log_cnt = 0;
-            if (log_cnt++ % 10 == 0) {
-                 RCLCPP_INFO(this->get_logger(), "A:[%.2f,%.2f,%.2f] G:[%.2f,%.2f,%.2f] M:[%.1f,%.1f,%.1f] P:%.0f D:%d",
-                             accel[0], accel[1], accel[2], gyro[0], gyro[1], gyro[2],
-                             mag[0], mag[1], mag[2], pressure, distance_mm);
+            if (log_cnt++ % 50 == 0) { // Log every 50 packets (~0.5s)
+                 RCLCPP_INFO(this->get_logger(), "IMU:[%.2f,%.2f,%.2f] MAG:[%.6f] BARO:%.0f TOF:%.3fm",
+                             accel[2], gyro[2], mag[2], pressure, tof_msg.range);
             }
-                        
-            // Publish [ax, ay, az, gx, gy, gz, mx, my, mz, pressure, distance]
-            std_msgs::msg::Float32MultiArray msg;
-            msg.data = {accel[0], accel[1], accel[2], gyro[0], gyro[1], gyro[2], 
-                        mag[0], mag[1], mag[2], pressure, (float)distance_mm};
-            imu_pub_->publish(msg);
-        } else {
-             std::cerr << "Bad Header" << std::endl;
         }
     }
 
@@ -305,7 +304,11 @@ private:
     int spi_fd_ = -1;
     std::thread poll_thread_;
     std::atomic<bool> running_;
-    rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr imu_pub_;
+    
+    rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::MagneticField>::SharedPtr mag_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::FluidPressure>::SharedPtr baro_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::Range>::SharedPtr tof_pub_;
 };
 
 int main(int argc, char **argv) {
