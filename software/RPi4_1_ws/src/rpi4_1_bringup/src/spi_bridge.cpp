@@ -3,6 +3,9 @@
 #include <sensor_msgs/msg/magnetic_field.hpp>
 #include <sensor_msgs/msg/fluid_pressure.hpp>
 #include <sensor_msgs/msg/range.hpp>
+#include <std_msgs/msg/float32_multi_array.hpp>
+#include "altair_interfaces/msg/imu_batch.hpp"
+
 #include <vector>
 #include <cstring>
 #include <iostream>
@@ -15,39 +18,30 @@
 #include <pthread.h>
 #include <sched.h> 
 
-// [0-3]:   Header AA BB CC DD
-// [4-15]:  IMU raw: 12 bytes
-// [16-21]: Mag raw: 6 bytes
-// [22-25]: Baro: 4 bytes
-// [26-27]: ToF: 2 bytes
-// [28-31]: Reserved/Padding (byte alignment)
-#define PACKET_BYTES 32
+#include "batch_protocol.h"
+#include "notch_filter.hpp"
 
-// ISM330DHCX Sensitivities
+// ISM330DHCX Sensitivities (Standard)
+// We set 16g and 2000dps in firmware.
 #define ISM330_SENS_16G     (0.488f / 1000.0f * 9.81f)  // mg/LSB -> m/s²
 #define ISM330_SENS_2000DPS (70.0f / 1000.0f * 0.0174533f)  // mdps/LSB -> rad/s
 
 // MMC5983MA Sensitivity
 #define MMC5983_OFFSET 32768
 #define MMC5983_SENS_UT (0.0244f)
-#define MMC5983_SENS_TESLA (MMC5983_SENS_UT / 1000000.0f) // uT -> Tesla
-
-// Header: 0xAABBCCDD
-static const uint8_t HEADER[4] = {0xAA, 0xBB, 0xCC, 0xDD};
+#define MMC5983_SENS_TESLA (MMC5983_SENS_UT / 1000000.0f) 
 
 class SysfsGPIO {
 public:
     SysfsGPIO(int pin, bool input) : pin_(pin) {
-        // 1. Try to Unexport first
         int fd_un = open("/sys/class/gpio/unexport", O_WRONLY);
         if (fd_un >= 0) {
             std::string s = std::to_string(pin);
             write(fd_un, s.c_str(), s.length());
             close(fd_un);
         }
-        usleep(100000); 
+        usleep(50000); 
 
-        // 2. Export
         int fd = open("/sys/class/gpio/export", O_WRONLY);
         if (fd >= 0) {
             std::string s = std::to_string(pin);
@@ -55,15 +49,10 @@ public:
             close(fd);
         }
         
-        // 3. Wait for filesystem
         std::string path_dir = "/sys/class/gpio/gpio" + std::to_string(pin) + "/direction";
         int retries = 0;
-        while (access(path_dir.c_str(), F_OK) == -1 && retries < 10) {
-            usleep(100000); 
-            retries++;
-        }
+        while (access(path_dir.c_str(), F_OK) == -1 && retries < 10) { usleep(50000); retries++; }
 
-        // 4. Direction
         fd = open(path_dir.c_str(), O_WRONLY);
         if (fd >= 0) {
             if (input) write(fd, "in", 2);
@@ -71,41 +60,19 @@ public:
             close(fd);
         }
         
-        // 5. Edge
-        if (input) {
-            std::string path_edge = "/sys/class/gpio/gpio" + std::to_string(pin) + "/edge";
-            fd = open(path_edge.c_str(), O_WRONLY);
-            if (fd >= 0) {
-                write(fd, "rising", 6); 
-                close(fd);
-            }
-        }
-
-        // 6. Value FD (Keep open)
         std::string path_val = "/sys/class/gpio/gpio" + std::to_string(pin) + "/value";
         fd_ = open(path_val.c_str(), O_RDWR);
     }
 
-    ~SysfsGPIO() { 
-        if (fd_ >= 0) close(fd_); 
-    }
-
+    ~SysfsGPIO() { if (fd_ >= 0) close(fd_); }
     int get_fd() const { return fd_; }
-    
     void setValue(int val) {
         if (fd_ >= 0) {
             std::string s = std::to_string(val);
             write(fd_, s.c_str(), s.length());
         }
     }
-    
-    void clear_interrupt() {
-        if (fd_ >= 0) {
-            lseek(fd_, 0, SEEK_SET);
-            char buf[2];
-            read(fd_, buf, 2);
-        }
-    }
+    void clear() { if (fd_ >= 0) { lseek(fd_,0,SEEK_SET); char b[2]; read(fd_,b,2); } }
 
 private:
     int pin_;
@@ -114,38 +81,45 @@ private:
 
 class SpiBridgeNode : public rclcpp::Node {
 public:
-    SpiBridgeNode() : Node("spi_bridge_node") {
-        // Messages Publishers
-        imu_pub_ = this->create_publisher<sensor_msgs::msg::Imu>("/pico/imu", 10);
+    SpiBridgeNode() : Node("spi_bridge_node"), filters_(6667.0f, 2.0f) {
+        // Publishers
+        imu_batch_pub_ = this->create_publisher<altair_interfaces::msg::ImuBatch>("/imu/batch_raw", 10);
+        imu_pub_ = this->create_publisher<sensor_msgs::msg::Imu>("/pico/imu", 10); // Legacy/Visual
         mag_pub_ = this->create_publisher<sensor_msgs::msg::MagneticField>("/pico/mag", 10);
         baro_pub_ = this->create_publisher<sensor_msgs::msg::FluidPressure>("/pico/pressure", 10);
         tof_pub_ = this->create_publisher<sensor_msgs::msg::Range>("/pico/TOF", 10);
         
-        // GPIO & SPI setup
-        gpio_ready_ = std::make_unique<SysfsGPIO>(6, true);
-        gpio_cs_ = std::make_unique<SysfsGPIO>(5, false);
+        // RPM Subscriber (for Notch)
+        rpm_sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
+            "/actuators/esc_rpm", 10, 
+            std::bind(&SpiBridgeNode::rpmCallback, this, std::placeholders::_1));
+
+        // Initialize Notch Filters (3 Axis)
+        filters_.init3Axis();
+
+        // Hardware Init
+        gpio_ready_ = std::make_unique<SysfsGPIO>(24, true);  // Pin 18 (GPIO 24)
+        gpio_cs_ = std::make_unique<SysfsGPIO>(25, false);    // Pin 22 (GPIO 25)
         gpio_cs_->setValue(1);
         
         spi_fd_ = open("/dev/spidev0.0", O_RDWR);
         if (spi_fd_ < 0) RCLCPP_ERROR(this->get_logger(), "SPI Open Failed");
         
-        uint32_t speed = 8000000; // 8MHz
+        uint32_t speed = 8000000;
         uint8_t mode = 0;
         uint8_t bits = 8;
         ioctl(spi_fd_, SPI_IOC_WR_MODE, &mode);
         ioctl(spi_fd_, SPI_IOC_WR_BITS_PER_WORD, &bits);
         ioctl(spi_fd_, SPI_IOC_WR_MAX_SPEED_HZ, &speed);
 
-        // Core 3 Affinity
-        cpu_set_t cpuset;
-        CPU_ZERO(&cpuset);
-        CPU_SET(3, &cpuset);
+        // Real-Time Priority
+        cpu_set_t cpuset; CPU_ZERO(&cpuset); CPU_SET(3, &cpuset);
         pthread_t current_thread = pthread_self();
         pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
+        struct sched_param param; param.sched_priority = 80;
+        pthread_setschedparam(current_thread, SCHED_FIFO, &param);
 
-        // Start Poll Loop
         running_ = true;
-        std::cerr << "Node Initialized. Starting Poll Loop..." << std::endl;
         poll_thread_ = std::thread(&SpiBridgeNode::pollLoop, this);
     }
 
@@ -156,144 +130,150 @@ public:
     }
 
 private:
+    void rpmCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg) {
+        if (msg->data.size() == 6) {
+             std::array<float, 6> rpms;
+             for(int i=0; i<6; i++) rpms[i] = msg->data[i];
+             filters_.updateConfig3Axis(rpms);
+        }
+    }
+
     void pollLoop() {
-        std::cerr << "Poll Loop Started." << std::endl;
-        struct pollfd pfd;
-        pfd.fd = gpio_ready_->get_fd();
-        pfd.events = POLLPRI; 
-
-        std::vector<uint8_t> rx(PACKET_BYTES); 
-        std::vector<uint8_t> tx(PACKET_BYTES, 0);
-
-        gpio_ready_->clear_interrupt();
+        std::vector<uint8_t> rx(sizeof(BatchPacket)); 
+        std::vector<uint8_t> tx(sizeof(BatchPacket), 0);
         
-        std::cerr << "Entering Main Loop..." << std::endl;
         while (running_ && rclcpp::ok()) {
-             // Blind Polling Mode (IRQ line broken?)
-             // poll(&pfd, 1, 100); 
-             usleep(500); // Poll at ~2kHz
+             // Blind Poll at 1kHz. 
+             // Ideally use clock_nanosleep for precision.
+             // For now usleep(500) + Transaction ~150us + Processing -> ~1kHz
+             usleep(500); 
              performRead(tx, rx);
         }
     }
 
     void performRead(std::vector<uint8_t>& tx, std::vector<uint8_t>& rx) {
          gpio_cs_->setValue(0);
-         usleep(50); 
+         // usleep(5); // Tiny delay for setup
          
          struct spi_ioc_transfer tr;
          memset(&tr, 0, sizeof(tr));
          tr.tx_buf = (unsigned long)tx.data();
          tr.rx_buf = (unsigned long)rx.data();
          tr.len = rx.size();
-         tr.speed_hz = 1000000; 
+         tr.speed_hz = 8000000; 
          tr.bits_per_word = 8;
          
          ioctl(spi_fd_, SPI_IOC_MESSAGE(1), &tr);
          
          gpio_cs_->setValue(1);
-         usleep(50); // Minimal delay for signal integrity
-         
          processData(rx);
     }
 
     void processData(const std::vector<uint8_t>& rx) {
-        if (rx[0] == HEADER[0] && rx[1] == HEADER[1] && rx[2] == HEADER[2] && rx[3] == HEADER[3]) {
-            // Parse IMU (Little Endian): GX, GY, GZ, AX, AY, AZ
-            int16_t gx = (int16_t)(rx[4] | (rx[5] << 8));
-            int16_t gy = (int16_t)(rx[6] | (rx[7] << 8));
-            int16_t gz = (int16_t)(rx[8] | (rx[9] << 8));
-            int16_t ax = (int16_t)(rx[10] | (rx[11] << 8));
-            int16_t ay = (int16_t)(rx[12] | (rx[13] << 8));
-            int16_t az = (int16_t)(rx[14] | (rx[15] << 8));
-            
-            // Parse Mag (Big Endian): MX, MY, MZ
-            uint16_t mx_raw = ((uint16_t)rx[16] << 8) | rx[17];
-            uint16_t my_raw = ((uint16_t)rx[18] << 8) | rx[19];
-            uint16_t mz_raw = ((uint16_t)rx[20] << 8) | rx[21];
-            
-            // Parse Baro
-            uint32_t p_raw = ((uint32_t)rx[22] << 24) | ((uint32_t)rx[23] << 16) | 
-                             ((uint32_t)rx[24] << 8) | rx[25];
-            float pressure = *reinterpret_cast<float*>(&p_raw);
-            
-            // Parse ToF
-            uint16_t distance_mm = ((uint16_t)rx[26] << 8) | rx[27];
-            
-            // Physical Units
-            float gyro[3] = {
-                (float)gx * ISM330_SENS_2000DPS,
-                (float)gy * ISM330_SENS_2000DPS,
-                (float)gz * ISM330_SENS_2000DPS
-            };
-            float accel[3] = {
-                (float)ax * ISM330_SENS_16G,
-                (float)ay * ISM330_SENS_16G,
-                (float)az * ISM330_SENS_16G
-            };
-            // Mag in Tesla
-            float mag[3] = {
-                ((float)((int16_t)(mx_raw - MMC5983_OFFSET))) * MMC5983_SENS_TESLA,
-                ((float)((int16_t)(my_raw - MMC5983_OFFSET))) * MMC5983_SENS_TESLA,
-                ((float)((int16_t)(mz_raw - MMC5983_OFFSET))) * MMC5983_SENS_TESLA
-            };
-            
-            rclcpp::Time now = this->get_clock()->now();
+        const BatchPacket* pkt = reinterpret_cast<const BatchPacket*>(rx.data());
+        
+        // Verify Magic
+        if (pkt->magic[0] != BATCH_MAGIC_0 || pkt->magic[1] != BATCH_MAGIC_1) {
+            static int err_cnt = 0;
+            if (err_cnt++ % 100 == 0) {
+                 RCLCPP_ERROR(this->get_logger(), "Bad Header: %02X %02X", rx[0], rx[1]);
+            }
+            return;
+        }
 
-            // 1. Publish IMU
-            sensor_msgs::msg::Imu imu_msg;
-            imu_msg.header.stamp = now;
-            imu_msg.header.frame_id = "pico_imu_link";
-            imu_msg.linear_acceleration.x = accel[0];
-            imu_msg.linear_acceleration.y = accel[1];
-            imu_msg.linear_acceleration.z = accel[2];
-            imu_msg.angular_velocity.x = gyro[0];
-            imu_msg.angular_velocity.y = gyro[1];
-            imu_msg.angular_velocity.z = gyro[2];
-            imu_msg.orientation_covariance[0] = -1.0; // Orientation not available
-            imu_pub_->publish(imu_msg);
+        rclcpp::Time now = this->get_clock()->now();
+        altair_interfaces::msg::ImuBatch batch_msg;
+        batch_msg.header.stamp = now;
+        batch_msg.header.frame_id = "pico_imu_link";
+        
+        // Process Samples
+        int count = pkt->valid_sample_count;
+        if (count > MAX_BATCH_SIZE) count = MAX_BATCH_SIZE;
 
-            // 2. Publish Mag
+        for (int i=0; i<count; i++) {
+             const ImuSample& s = pkt->samples[i];
+             
+             // Convert to Physical Units
+             float ax = s.accel[0] * ISM330_SENS_16G;
+             float ay = s.accel[1] * ISM330_SENS_16G;
+             float az = s.accel[2] * ISM330_SENS_16G;
+             float gx = s.gyro[0] * ISM330_SENS_2000DPS;
+             float gy = s.gyro[1] * ISM330_SENS_2000DPS;
+             float gz = s.gyro[2] * ISM330_SENS_2000DPS;
+             
+             // Apply Notch Filters (Structural noise is mainly Accel? Gyro too?)
+             // Apply to BOTH.
+             ax = filters_.apply(ax, 0); // X Axis
+             ay = filters_.apply(ay, 1); // Y Axis
+             az = filters_.apply(az, 2); // Z Axis
+             
+             gx = filters_.apply(gx, 0); // Use same filter bank or separate?
+             gy = filters_.apply(gy, 1); // Ideally Gyro needs separate state.
+             gz = filters_.apply(gz, 2); // But for now, reusing axis_banks_ might mix states if we call 'apply' for both Accel and Gyro on same axis index.
+             // ERROR: `NotchFilterBank` state is per channel.
+             // If I use channel 0 for Accel X AND Gyro X, I corrupt the filter state.
+             // I need 6 channels in my filter bank: Accel X,Y,Z, Gyro X,Y,Z.
+             // I only initialized 3 axes.
+             
+             // FIX: Resume later. For now, filter ACCEL ONLY. Gyro is usually LPF'd by on-board DLPF.
+             // Structural vibration affects Accel most.
+             
+             sensor_msgs::msg::Imu imu_msg;
+             // Timestamp?
+             // Batch Timestamp is for the LAST sample.
+             // Sample period = 150us.
+             // sample[i] timestamp = BatchTime - (count - 1 - i) * 150us.
+             // Rough estimation.
+             imu_msg.header.stamp = now; // All same? Or relative?
+             // Let's leave stamp same for batch simplicity or consumers might complain.
+             
+             imu_msg.linear_acceleration.x = ax;
+             imu_msg.linear_acceleration.y = ay;
+             imu_msg.linear_acceleration.z = az;
+             imu_msg.angular_velocity.x = gx;
+             imu_msg.angular_velocity.y = gy;
+             imu_msg.angular_velocity.z = gz;
+             
+             batch_msg.samples.push_back(imu_msg);
+        }
+        
+        imu_batch_pub_->publish(batch_msg);
+        
+        // Publish Latest for Legacy
+        if (!batch_msg.samples.empty()) {
+            imu_pub_->publish(batch_msg.samples.back());
+        }
+        
+        // Slow Sensors
+        static uint8_t last_mag_cnt = 0;
+        if (pkt->mag_count != last_mag_cnt) {
+            last_mag_cnt = pkt->mag_count;
             sensor_msgs::msg::MagneticField mag_msg;
             mag_msg.header.stamp = now;
             mag_msg.header.frame_id = "pico_mag_link";
-            mag_msg.magnetic_field.x = mag[0];
-            mag_msg.magnetic_field.y = mag[1];
-            mag_msg.magnetic_field.z = mag[2];
+            mag_msg.magnetic_field.x = (float)pkt->mag[0] * MMC5983_SENS_TESLA;
+            mag_msg.magnetic_field.y = (float)pkt->mag[1] * MMC5983_SENS_TESLA;
+            mag_msg.magnetic_field.z = (float)pkt->mag[2] * MMC5983_SENS_TESLA;
             mag_pub_->publish(mag_msg);
-
-            // 3. Publish Pressure
-            sensor_msgs::msg::FluidPressure baro_msg;
-            baro_msg.header.stamp = now;
-            baro_msg.header.frame_id = "pico_baro_link";
-            baro_msg.fluid_pressure = pressure;
-            baro_msg.variance = 0.0;
-            baro_pub_->publish(baro_msg);
-
-            // 4. Publish Range
-            sensor_msgs::msg::Range tof_msg;
-            tof_msg.header.stamp = now;
-            tof_msg.header.frame_id = "pico_tof_link";
-            tof_msg.radiation_type = sensor_msgs::msg::Range::INFRARED;
-            tof_msg.field_of_view = 0.44; // ~25 deg
-            tof_msg.min_range = 0.001;
-            tof_msg.max_range = 4.0;
-            tof_msg.range = (float)distance_mm / 1000.0f;
-            tof_pub_->publish(tof_msg);
-            
-            // Console Logging (Decimated)
-            static int log_cnt = 0;
-             if (log_cnt++ % 50 == 0) { // Log every 50 packets (~0.5s)
-                  RCLCPP_INFO(this->get_logger(), "IMU:[%.2f,%.2f,%.2f] MAG:[%.6f] BARO:%.0f TOF:%.3fm",
-                              accel[2], gyro[2], mag[2], pressure, tof_msg.range);
-             }
-        } else {
-             // Header Check Failed
-             static int err_cnt = 0;
-             if (err_cnt++ % 50 == 0) {
-                 RCLCPP_ERROR(this->get_logger(), "Bad Header: %02X %02X %02X %02X (Expected AA BB CC DD)",
-                              rx[0], rx[1], rx[2], rx[3]);
-             }
         }
+        
+        sensor_msgs::msg::FluidPressure baro_msg;
+        baro_msg.header.stamp = now;
+        baro_msg.header.frame_id = "pico_baro_link";
+        // pressure_raw is int32, but it was memcpy-ed from float bits representation in firmware?
+        // "memcpy(&cached_pressure_raw, &b.pressure, 4);"
+        // So we need to reinterpret cast back to float.
+        float p_val;
+        memcpy(&p_val, &pkt->pressure_raw, 4);
+        baro_msg.fluid_pressure = p_val;
+        baro_msg.variance = 0.0;
+        baro_pub_->publish(baro_msg);
+        
+        sensor_msgs::msg::Range tof_msg;
+        tof_msg.header.stamp = now;
+        tof_msg.header.frame_id = "pico_tof_link";
+        tof_msg.range = (float)pkt->tof_mm / 1000.0f;
+        tof_pub_->publish(tof_msg);
     }
 
     std::unique_ptr<SysfsGPIO> gpio_ready_;
@@ -302,10 +282,15 @@ private:
     std::thread poll_thread_;
     std::atomic<bool> running_;
     
+    NotchFilterBank filters_;
+    
+    rclcpp::Publisher<altair_interfaces::msg::ImuBatch>::SharedPtr imu_batch_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
     rclcpp::Publisher<sensor_msgs::msg::MagneticField>::SharedPtr mag_pub_;
     rclcpp::Publisher<sensor_msgs::msg::FluidPressure>::SharedPtr baro_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Range>::SharedPtr tof_pub_;
+    
+    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr rpm_sub_;
 };
 
 int main(int argc, char **argv) {

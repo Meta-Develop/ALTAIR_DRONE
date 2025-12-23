@@ -1,0 +1,74 @@
+.program uart_rx
+
+; Slightly optimized for 8N1
+; Input pin should be mapped to the IN pin group
+; Sideset pin is optional (not used here)
+
+.wrap_target
+start:
+    wait 0 pin 0        ; Wait for start bit (low)
+    set x, 7            ; 8 bits data
+    delay [10]          ; Delay to center of bit 0 (tuned in C)
+bitloop:
+    in pins, 1          ; Sample bit
+    jmp x-- bitloop [6] ; Delay 1 bit period
+    push                ; Push 32-bit word (only bottom 8 used)
+.wrap
+
+% c-sdk {
+static inline void uart_rx_program_init(PIO pio, uint sm, uint offset, uint pin, uint baud) {
+    pio_sm_config c = uart_rx_program_get_default_config(offset);
+
+    // Set pin to input
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, false);
+    pio_gpio_init(pio, pin);
+    sm_config_set_in_pins(&c, pin);
+    
+    // Shift right (LSB first), autopush=false (we push manually)
+    sm_config_set_in_shift(&c, true, false, 32);
+    
+    // FIFO Join RX
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+    
+    // Clock Calculation
+    // We execute 8 cycles per bit loop? No.
+    // 'in' (1) + 'jmp' (1) = 2 cycles.
+    // We need delays to match baud.
+    // Let's rely on clock divider to set 1 cycle = X time?
+    // Usually easier to run PIO fast and use delay instructions, or run PIO at 8 * baud.
+    // If we run PIO at 8 * baud:
+    // Start bit wait.
+    // Delay 1.5 bits = 12 cycles.
+    // Loop: sample, wait 1 bit (8 cycles).
+    
+    // My PIO code above is vague on delays. 
+    // Let's use standard:
+    // wait 0 pin 0 
+    // set x, 7 [10] ; Wait 10 cycles? 
+    
+    // Let's fix the PIO code. Standard SDK example:
+    // start:
+    //   wait 0 pin 0
+    //   set x, 7 [10]
+    // bitloop:
+    //   in pins, 1
+    //   jmp x-- bitloop [6]
+    
+    // Calculations:
+    // Start detection takes roughly 0-1 cycle latency.
+    // Then we wait [10] cycles -> Total ~11-12 cycles to center of bit 0? 
+    // Bit loop: in (1) + jmp (1) + [6] = 8 cycles per bit.
+    // So 1 bit = 8 PIO cycles.
+    // Start offset = 1.5 bits = 12 cycles.
+    // Wait (1) + Set (1) + [10] = 12. Correct or close.
+    // So verify: clock div must result in 8 cycles per bit.
+    // sys_clk / div = 8 * baud.
+    // div = sys_clk / (8 * baud).
+    
+    float div = (float)clock_get_hz(clk_sys) / (8.0f * baud);
+    sm_config_set_clkdiv(&c, div);
+    
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}

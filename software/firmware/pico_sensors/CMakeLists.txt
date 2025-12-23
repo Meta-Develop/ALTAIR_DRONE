@@ -20,7 +20,7 @@ add_executable(pico_sensors_dma
     src/drivers/bmp388.c
     src/drivers/vl53l4cx.c
 )
-target_include_directories(pico_sensors_dma PRIVATE src src/drivers)
+target_include_directories(pico_sensors_dma PRIVATE src src/drivers ../../common)
 target_link_libraries(pico_sensors_dma 
     pico_stdlib 
     hardware_spi 
@@ -29,6 +29,7 @@ target_link_libraries(pico_sensors_dma
     hardware_dma
     hardware_pio
     hardware_timer
+    hardware_sync
 )
 pico_generate_pio_header(pico_sensors_dma ${CMAKE_CURRENT_LIST_DIR}/src/spi_slave.pio)
 target_include_directories(pico_sensors_dma PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
