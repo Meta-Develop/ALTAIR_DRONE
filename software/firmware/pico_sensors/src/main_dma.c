@@ -371,6 +371,13 @@ int main() {
     while(1) {
         check_imu_data();
         check_slow_sensors();
+        
+        static uint32_t last_print = 0;
+        uint32_t now = time_us_32();
+        if (now - last_print > 1000000) {
+            last_print = now;
+            printf("SENSOR_ALIVE\n");
+        }
         // No sleep. Run as fast as possible.
         // check_imu_data polls status reg, so it won't spinlock excessively on SPI bus logic.
     }
