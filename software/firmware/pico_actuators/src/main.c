@@ -76,7 +76,8 @@ int main() {
         }
         
         // Trigger Output
-        dshot_send_frame();
+        // dshot_send_frame(); // Removed: Write triggers immediate send
+
         
         // 2. Read Telemetry (Placeholder)
         // In future: Read PIO RX FIFO here.
