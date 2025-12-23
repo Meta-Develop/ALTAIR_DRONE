@@ -12,7 +12,7 @@ pico_sdk_init()
 # Actuator Firmware Target
 add_executable(pico_actuators 
     src/main.c
-    # src/drivers/dshot.c # To be created
+    src/drivers/dshot.c
     # src/drivers/telemetry.c # To be created
 )
 
