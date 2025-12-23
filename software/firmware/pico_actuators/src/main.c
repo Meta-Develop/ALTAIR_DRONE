@@ -149,8 +149,8 @@ int main() {
     
     dma_channel_config c_rx = dma_channel_get_default_config(dma_rx);
     channel_config_set_transfer_data_size(&c_rx, DMA_SIZE_8);
-    channel_config_set_read_increment(&c_rx, true);
-    channel_config_set_write_increment(&c_rx, false);
+    channel_config_set_read_increment(&c_rx, false);
+    channel_config_set_write_increment(&c_rx, true);
     channel_config_set_dreq(&c_rx, pio_get_dreq(pio_slave, sm_slave, false)); // RX DREQ
     dma_channel_configure(dma_rx, &c_rx, rx_buffer, &pio_slave->rxf[sm_slave], 0, false);
     
