@@ -1,15 +1,22 @@
 import spidev
 import time
+import RPi.GPIO as GPIO
 
 # SPI Config
 BUS = 1
-DEVICE = 2 # spidev1.2 (Uses CS2 / GPIO 16 which matches Pico 2B Wiring)
+DEVICE = 2 # Placeholder, we use Manual CS
+CS_PIN = 16 # GPIO 16 (Pin 36) - Actuator CS
+
+# Setup Manual CS
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(CS_PIN, GPIO.OUT)
+GPIO.output(CS_PIN, GPIO.HIGH) # Idle High
 
 spi = spidev.SpiDev()
 spi.open(BUS, DEVICE)
 spi.max_speed_hz = 100000 
 spi.mode = 0
-# spi.no_cs = False (Default, so it will toggle CEx driven by kernel)
+spi.no_cs = True # Disable HW CS
 
 def calculate_checksum(data):
     xor = 0
@@ -18,9 +25,8 @@ def calculate_checksum(data):
     return xor
 
 def test():
-    print(f"Testing Pico (SPI1.2) HW CS...")
+    print(f"Testing Pico (SPI1) Manual CS={CS_PIN}...")
     
-    # Send Actuator Packet (16 bytes) + Padding (30 bytes) = 46 total
     cmd = bytearray(16)
     cmd[0] = 0xBA
     cmd[1] = 0xBE
@@ -29,7 +35,9 @@ def test():
     tx_buf = list(cmd + bytearray(30))
     
     # Transaction
+    GPIO.output(CS_PIN, GPIO.LOW)
     rx_buf = spi.xfer2(tx_buf)
+    GPIO.output(CS_PIN, GPIO.HIGH)
     
     bytes_rx = bytearray(rx_buf)
     
@@ -48,3 +56,4 @@ if __name__ == "__main__":
             time.sleep(0.5)
     except KeyboardInterrupt:
         spi.close()
+        GPIO.cleanup()

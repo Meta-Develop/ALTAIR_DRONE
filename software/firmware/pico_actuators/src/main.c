@@ -108,6 +108,9 @@ void cs_irq_handler(uint gpio, uint32_t events) {
         // Copy rx_buffer to rx_pkt if valid magic
         if (rx_buffer[0] == 0xBA && rx_buffer[1] == 0xBE) {
             memcpy((void*)&rx_pkt, rx_buffer, sizeof(ActuatorPacket));
+            printf("SPI RX: OK (Throttle1=%d)\n", rx_pkt.throttle[0]);
+        } else {
+             printf("SPI RX: BAD MAGIC %02X %02X\n", rx_buffer[0], rx_buffer[1]);
         }
         
         // Prepare TX packet for NEXT time?
