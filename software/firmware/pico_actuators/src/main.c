@@ -97,9 +97,13 @@ void cs_irq_handler(uint gpio, uint32_t events) {
         
         // 3. Enable PIO
         pio_sm_set_enabled(pio_slave, sm_slave, true);
+        
+        gpio_put(25, 1); // LED ON at Start
     }
     else if (events & GPIO_IRQ_EDGE_RISE) {
         // --- Transaction END ---
+        gpio_put(25, 0); // LED OFF at End
+
         // Check if we received enough data?
         // Copy rx_buffer to rx_pkt if valid magic
         if (rx_buffer[0] == 0xBA && rx_buffer[1] == 0xBE) {
@@ -150,6 +154,10 @@ int main() {
     // IRQ Setup
     gpio_init(PIN_CS); gpio_set_dir(PIN_CS, GPIO_IN); gpio_pull_up(PIN_CS);
     gpio_set_irq_enabled_with_callback(PIN_CS, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true, &cs_irq_handler);
+
+    // Debug LED
+    gpio_init(25); gpio_set_dir(25, GPIO_OUT);
+
 
     // Initial Packet
     tx_pkt.magic[0] = 0xCA; tx_pkt.magic[1] = 0xFE;

@@ -1,18 +1,22 @@
 import spidev
 import time
-import struct
-
-# Actuator Packet (Send): Magic(2), Throttle(12), Flags(1), Cksum(1) = 16 bytes
-# Telemetry Packet (Recv): Magic(2), RPM(12), Volt(12), Curr(12), Temp(6), Stat(1), Cksum(1) = 46 bytes?
-# Let's check struct size in main.c
-# ActuatorPacket: 2 + 12 + 1 + 1 = 16 bytes.
-# TelemetryPacket: 2 + 12 + 12 + 12 + 6 + 1 + 1 = 46 bytes.
+import RPi.GPIO as GPIO
 
 # SPI Config
+BUS = 0
+DEVICE = 0
+CS_PIN = 25 # GPIO 25 (Pin 22) matches Pico 2A Wiring
+
+# Setup Manual CS
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(CS_PIN, GPIO.OUT)
+GPIO.output(CS_PIN, GPIO.HIGH) # Idle High
+
 spi = spidev.SpiDev()
-spi.open(0, 0) # SPI0, CE0
-spi.max_speed_hz = 1000000 
+spi.open(BUS, DEVICE)
+spi.max_speed_hz = 100000 
 spi.mode = 0
+spi.no_cs = True # Disable HW CS
 
 def calculate_checksum(data):
     xor = 0
@@ -21,32 +25,25 @@ def calculate_checksum(data):
     return xor
 
 def test():
-    print("Testing Pico 2B SPI Connection...")
+    print(f"Testing Pico (SPI{BUS}) Manual CS={CS_PIN}...")
     
-    # Create Command: Idle (0 throttle)
+    # Send Actuator Packet (16 bytes) + Padding (30 bytes) = 46 total
     cmd = bytearray(16)
     cmd[0] = 0xBA
     cmd[1] = 0xBE
-    # Throttle 0
-    # Flags = 0 (Disarmed)
     cmd[15] = calculate_checksum(cmd[:15])
     
+    tx_buf = list(cmd + bytearray(30))
+    
     # Transaction
-    # We send 16 bytes, but need to read 46 bytes?
-    # SPI is full duplex. 
-    # If we want to read 46 bytes, we must xfer 46 bytes.
-    # We pad our command to 46 bytes.
-    
-    tx_buf = cmd + bytearray(46 - 16)
-    
-    # Assert CS (Software manual if needed, but SpiDev handles CE0)
-    # However, our Pico expects CS framing.
-    
-    rx_buf = spi.xfer2(list(tx_buf))
+    GPIO.output(CS_PIN, GPIO.LOW) # CS Fall (Start)
+    time.sleep(0.0001) # Small setup time
+    rx_buf = spi.xfer2(tx_buf)
+    GPIO.output(CS_PIN, GPIO.HIGH) # CS Rise (End)
     
     bytes_rx = bytearray(rx_buf)
     
-    print(f"TX: {tx_buf.hex()}")
+    print(f"TX: {bytes(tx_buf[:16]).hex()}...")
     print(f"RX: {bytes_rx.hex()}")
     
     if bytes_rx[0] == 0xCA and bytes_rx[1] == 0xFE:
@@ -61,3 +58,4 @@ if __name__ == "__main__":
             time.sleep(0.5)
     except KeyboardInterrupt:
         spi.close()
+        GPIO.cleanup()
