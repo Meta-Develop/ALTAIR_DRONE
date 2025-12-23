@@ -1,0 +1,74 @@
+
+; SPI Slave Duplex (CPHA=0, CPOL=0)
+; 
+; Transmits data from TX FIFO to MISO.
+; Receives data from MOSI to RX FIFO.
+; 
+; Pin assignments:
+; - OUT: MISO
+; - IN: MOSI
+; - SCK: Masked wait (GPIO 18 hardcoded or relative?)
+;   For simplicity, we'll hardcode SCK as GPIO 18 (as per previous PIO)
+;   OR we can use a 'wait pin' if configured. 
+;   Let's hardcode 18 to match standard wiring.
+
+.program spi_slave_duplex
+
+public entry_point:
+.wrap_target
+    pull block          ; Wait for TX data (1 byte)
+    
+    out pins, 1         ; Output MSB (Bit 7) to MISO immediately (CPHA=0)
+    set x, 6            ; 7 more bits to loop
+
+bitloop:
+    wait 1 gpio 18      ; Wait SCK Rising Edge (Master Reads MISO, We Read MOSI)
+    in pins, 1          ; Sample MOSI (Bit 7..1) into ISR
+    
+    wait 0 gpio 18      ; Wait SCK Falling Edge
+    out pins, 1         ; Output next MISO bit (Bit 6..0)
+    
+    jmp x-- bitloop     ; Loop
+
+    ; Last bit (Bit 0)
+    wait 1 gpio 18      ; Wait SCK Rising Edge
+    in pins, 1          ; Sample MOSI (Bit 0)
+    
+    wait 0 gpio 18      ; Wait SCK Falling Edge (Transaction done for this byte)
+    
+    push noblock        ; Push ISR (received byte) to RX FIFO
+.wrap
+
+% c-sdk {
+#include "hardware/gpio.h"
+
+static inline void spi_slave_duplex_init(PIO pio, uint sm, uint offset, uint pin_miso, uint pin_mosi) {
+    pio_sm_config c = spi_slave_duplex_program_get_default_config(offset);
+    
+    // MISO (Output)
+    sm_config_set_out_pins(&c, pin_miso, 1);
+    pio_gpio_init(pio, pin_miso);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_miso, 1, true);
+
+    // MOSI (Input)
+    sm_config_set_in_pins(&c, pin_mosi);
+    pio_gpio_init(pio, pin_mosi);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_mosi, 1, false);
+    
+    // SCK (Input) - handled by 'wait gpio 18'
+    // Ensure SCK is input
+    pio_gpio_init(pio, 18);
+    gpio_set_dir(18, GPIO_IN);
+
+    // Shifting
+    // OUT: Left, No Autopull (We pull manually), 8 bits threshold? No, manual.
+    // IN: Left, Autopush? No, manual push.
+    sm_config_set_out_shift(&c, false, false, 8); 
+    sm_config_set_in_shift(&c, false, false, 8);
+    
+    // Run at full speed
+    sm_config_set_clkdiv(&c, 1.0f);
+    
+    pio_sm_init(pio, sm, offset, &c);
+}
+%}

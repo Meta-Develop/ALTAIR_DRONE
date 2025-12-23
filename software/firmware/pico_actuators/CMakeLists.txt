@@ -35,6 +35,7 @@ pico_generate_pio_header(pico_actuators ${CMAKE_CURRENT_LIST_DIR}/src/spi_slave.
 # Generate PIO Header for DShot
 pico_generate_pio_header(pico_actuators ${CMAKE_CURRENT_LIST_DIR}/src/drivers/dshot.pio)
 pico_generate_pio_header(pico_actuators ${CMAKE_CURRENT_LIST_DIR}/src/drivers/dshot_bidir.pio)
+pico_generate_pio_header(pico_actuators ${CMAKE_CURRENT_LIST_DIR}/src/spi_slave_duplex.pio)
 # pico_generate_pio_header(pico_actuators ${CMAKE_CURRENT_LIST_DIR}/src/drivers/uart_rx.pio)
 
 
