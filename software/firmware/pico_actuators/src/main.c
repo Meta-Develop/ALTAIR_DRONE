@@ -165,6 +165,7 @@ int main() {
     while(true) {
         // Loop Rate: ~1kHz ideally synced to SPI
         sleep_us(1000);
+        printf("ACTUATOR_ALIVE\n");
         
         // 1. Process Motors
         for(int i=0; i<6; i++) {
