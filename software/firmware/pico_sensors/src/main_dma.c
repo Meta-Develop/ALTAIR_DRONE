@@ -100,12 +100,11 @@ void cs_irq_handler(uint gpio, uint32_t events) {
         pio_sm_clear_fifos(pio, sm);
         pio_sm_restart(pio, sm);
         
-        // JMP to entry point
-        pio_sm_exec(pio, sm, pio_encode_jmp(offset + spi_slave_offset_entry_point));
+        // JMP to entry point (Removed entry_point, just start SM)
+        pio_sm_exec(pio, sm, pio_encode_jmp(offset));
 
         // Configure DMA to send the READY buffer
-        // Note: batch_buffers[ready_idx] should be fully prepared.
-        dma_channel_set_trans_count(dma_tx, sizeof(BatchPacket)/4, false); // Words
+        dma_channel_set_trans_count(dma_tx, sizeof(BatchPacket), false); // Bytes
         dma_channel_set_read_addr(dma_tx, &batch_buffers[ready_idx], true); // Trigger logic? No, true means trigger?
         // Wait, dma_channel_set_read_addr(..., trigger=true) starts it.
         // But we need PIO to be enabled first? Or PIO enabled after?
@@ -351,9 +350,9 @@ int main() {
     // DMA Config
     dma_tx = dma_claim_unused_channel(true);
     dma_channel_config c = dma_channel_get_default_config(dma_tx);
-    channel_config_set_transfer_data_size(&c, DMA_SIZE_32); // Transfer 32-bit words
+    channel_config_set_transfer_data_size(&c, DMA_SIZE_8); // 8-bit bytes
     channel_config_set_read_increment(&c, true);
-    channel_config_set_write_increment(&c, false); // Pushing to fixed FIFO addr
+    channel_config_set_write_increment(&c, false);
     channel_config_set_dreq(&c, pio_get_dreq(pio, sm, true));
     
     dma_channel_configure(dma_tx, &c, 

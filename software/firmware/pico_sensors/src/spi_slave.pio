@@ -9,34 +9,19 @@
 ; - Hardcoded wait on SCK (GPIO 18)
 
 .program spi_slave
-
-; Entry point: PIO is reset here by C code on CS fall
-public entry_point:
 .wrap_target
-    ; Pull next byte. RIGHT shift.
-    pull block      
-    
-    ; Force pin direction to OUTPUT (1) mapped to MISO
-    set pindirs, 1
-    
-    ; Output Bit 0 (first bit) immediately
-    out pins, 1
-    
-    ; Loop for remaining 7 bits
-    set x, 6
+    pull block          ; Wait for data (will be 8-bit via DMA)
+    out pins, 1         ; Output MSB (Bit 7) immediately (CPHA=0)
+    set x, 6            ; 7 more bits to loop
 bitloop:
-    ; Wait for SCK Rising Edge (Master samples)
-    wait 1 gpio 18
-    
-    ; Wait for SCK Falling Edge (Slave shifts)
-    wait 0 gpio 18
-    out pins, 1
-    
+    wait 1 gpio 18      ; Wait SCK Rising Edge (Master Reads)
+    wait 0 gpio 18      ; Wait SCK Falling Edge (Slave Shifts)
+    out pins, 1         ; Output next bit (Bit 6...0)
     jmp x-- bitloop
     
-    ; After 8 bits, wait for last SCK fall to complete
-    wait 1 gpio 18
-    wait 0 gpio 18
+    ; Transaction complete for this byte
+    wait 1 gpio 18      ; Last bit rising
+    wait 0 gpio 18      ; Last bit falling
 .wrap
 
 % c-sdk {
@@ -55,10 +40,8 @@ static inline void spi_slave_init(PIO pio, uint sm, uint offset, uint pin_miso) 
     pio_gpio_init(pio, pin_miso);
     pio_sm_set_consecutive_pindirs(pio, sm, pin_miso, 1, true); // Output
     
-    // Shift config: LEFT shift (MSB first), no autopull, 32 bits
-    // We provide 32-bit words with data in MSB (e.g., 0xAA000000)
-    // 'out' instruction consumes from MSB (31) and shifts OSR left
-    sm_config_set_out_shift(&c, false, false, 32);
+    // Shift config: LEFT shift (MSB first), no autopull, 8 bits
+    sm_config_set_out_shift(&c, false, false, 8);
     
     // Run at full system clock
     sm_config_set_clkdiv(&c, 1.0f);
