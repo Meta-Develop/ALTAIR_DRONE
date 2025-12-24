@@ -195,6 +195,16 @@ void setup_sensors() {
     data[0] = 0x11; data[1] = 0xA4; 
     gpio_put(PIN_CS_IMU, 0); spi_write_blocking(spi1, data, 2); gpio_put(PIN_CS_IMU, 1);
 
+    // Debug: Verify 6.66kHz ODR override worked
+    sleep_ms(5);
+    uint8_t rd_cmd = 0x10 | 0x80;
+    uint8_t rd_buf[2];
+    gpio_put(PIN_CS_IMU, 0); 
+    spi_write_blocking(spi1, &rd_cmd, 1);
+    spi_read_blocking(spi1, 0x00, rd_buf, 2);
+    gpio_put(PIN_CS_IMU, 1);
+    printf("[SETUP] After ODR override: CTRL1_XL=0x%02X CTRL2_G=0x%02X (exp 0xA4)\n", rd_buf[0], rd_buf[1]);
+
     mmc5983_init(spi1, PIN_CS_MAG);
     bmp388_init(i2c0);
     vl53_init(i2c0);
