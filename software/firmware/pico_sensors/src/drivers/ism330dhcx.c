@@ -98,6 +98,16 @@ void ism330_read_data(spi_inst_t *spi, uint cs_pin, ism330_data_t *data) {
 
 bool ism330_data_ready(spi_inst_t *spi, uint cs_pin) {
     uint8_t status = ism330_read_reg(spi, cs_pin, ISM330_STATUS_REG);
+    
+    // Debug: Print status every ~1 second (assuming 1kHz+ polling)
+    static uint32_t call_count = 0;
+    static uint32_t ready_count = 0;
+    call_count++;
+    if ((status & 0x03) == 0x03) ready_count++;
+    if (call_count % 10000 == 0) {
+        printf("[ISM330] Status=0x%02X, Ready=%lu/%lu\n", status, ready_count, call_count);
+    }
+    
     // Bit 0 = XLDA (Accel ready), Bit 1 = GDA (Gyro ready)
     return (status & 0x03) == 0x03;
 }
