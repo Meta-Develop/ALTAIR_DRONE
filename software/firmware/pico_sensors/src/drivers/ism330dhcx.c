@@ -62,6 +62,14 @@ bool ism330_init(spi_inst_t *spi, uint cs_pin) {
     // CTRL3_C: Block Data Update (BDU) enable, auto-increment
     ism330_write_reg(spi, cs_pin, ISM330_CTRL3_C, 0x44);  // BDU + IF_INC
     
+    // Read back and verify configuration
+    uint8_t ctrl1 = ism330_read_reg(spi, cs_pin, ISM330_CTRL1_XL);
+    uint8_t ctrl2 = ism330_read_reg(spi, cs_pin, ISM330_CTRL2_G);
+    uint8_t ctrl3 = ism330_read_reg(spi, cs_pin, ISM330_CTRL3_C);
+    printf("[ISM330] CTRL1_XL=0x%02X (exp 0x%02X), CTRL2_G=0x%02X (exp 0x%02X), CTRL3_C=0x%02X\n", 
+           ctrl1, ISM330_ODR_1660HZ | ISM330_FS_XL_16G, 
+           ctrl2, ISM330_ODR_1660HZ | ISM330_FS_G_2000DPS, ctrl3);
+    
     printf("[ISM330] Init SUCCESS - 1.66kHz ODR, ±16g, ±2000dps\n");
     return true;
 }
