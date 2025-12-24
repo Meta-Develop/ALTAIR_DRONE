@@ -373,21 +373,39 @@ int main() {
                           
     // Interrupts
     gpio_init(PIN_CS_SLAVE); gpio_set_dir(PIN_CS_SLAVE, GPIO_IN); gpio_pull_up(PIN_CS_SLAVE);
-    gpio_set_irq_enabled_with_callback(PIN_CS_SLAVE, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true, &cs_irq_handler);
+    gpio_set_irq_enabled_with_callback(PIN_CS_SLAVE, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true, &cs_irq_handler);
 
-    printf("Setup Complete. Entering High-Speed Loop.\n");
-    
-    while(1) {
-        check_imu_data();
+    // Initial Trigger of DMA+PIO to be ready for first transaction
+    // This ensures MISO is driven even if we miss the first Falling Edge (or if CS is already low)
+    dma_channel_set_trans_count(dma_tx, sizeof(BatchPacket), false);
+    dma_channel_set_read_addr(dma_tx, &batch_buffers[ready_idx], true); // Start DMA
+    pio_sm_set_enabled(pio, sm, true); // Enable PIO
+
+    printf("[MAIN] PIO Slave Enabled & DMA Started. Waiting for CS...\n");
+    printf("[MAIN] Buffer Magic: %02X %02X\n", batch_buffers[ready_idx].magic[0], batch_buffers[ready_idx].magic[1]);
+
+    // --- MAIN LOOP ---
+    uint32_t last_log = 0;
+    uint32_t last_cs_count = 0;
+    uint32_t irq_log_counter = 0;
+
+    while (true) {
+        check_imu_data();   // Fast polling (1kHz+)
         check_slow_sensors();
-        
-        static uint32_t last_print = 0;
+
         uint32_t now = time_us_32();
-        if (now - last_print > 1000000) {
-            last_print = now;
-            printf("SENSOR_ALIVE CS=%lu\n", cs_irq_count);
+        if (now - last_log > 1000000) { // 1Hz heartbeat
+            gpio_xor_mask(1u << PIN_LED);
+            
+            // Debug: Check if CS Interrupts are firing
+            if (cs_irq_count != last_cs_count) {
+                printf("[MAIN] CS IRQ Count: %lu (Delta: %lu)\n", cs_irq_count, cs_irq_count - last_cs_count);
+                last_cs_count = cs_irq_count;
+            } else {
+                 // Print CS Pin State to see if it's stuck
+                 printf("[MAIN] CS Idle. Pin State: %d. IRQ Count: %lu\n", gpio_get(PIN_CS_SLAVE), cs_irq_count);
+            }
+            last_log = now;
         }
-        // No sleep. Run as fast as possible.
-        // check_imu_data polls status reg, so it won't spinlock excessively on SPI bus logic.
     }
 }
