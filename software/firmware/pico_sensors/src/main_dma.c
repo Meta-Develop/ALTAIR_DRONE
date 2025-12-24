@@ -434,6 +434,8 @@ int main() {
             if (cs_irq_count != last_cs_count) {
                 printf("[MAIN] CS IRQ Count: %lu (Delta: %lu)\n", 
                        cs_irq_count, cs_irq_count - last_cs_count);
+                // Print first word of TX Buffer to verify content
+                printf("[MAIN] TX[0]=0x%08X (Expected ~0xAA55...)\n", spi_tx_buffers[ready_idx][0]);
                 last_cs_count = cs_irq_count;
             } else {
                  // Print CS Pin State to see if it's stuck
