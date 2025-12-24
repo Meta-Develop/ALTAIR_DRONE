@@ -124,13 +124,19 @@ void ism330_read_data(spi_inst_t *spi, uint cs_pin, ism330_data_t *data) {
 bool ism330_data_ready(spi_inst_t *spi, uint cs_pin) {
     uint8_t status = ism330_read_reg(spi, cs_pin, ISM330_STATUS_REG);
     
-    // Debug: Print status every ~1 second (assuming 1kHz+ polling)
+    // Debug: Print status and occasionally re-check config
     static uint32_t call_count = 0;
     static uint32_t ready_count = 0;
     call_count++;
     if ((status & 0x03) == 0x03) ready_count++;
     if (call_count % 10000 == 0) {
         printf("[ISM330] Status=0x%02X, Ready=%lu/%lu\n", status, ready_count, call_count);
+    }
+    // Every million calls, re-check the configuration registers
+    if (call_count % 1000000 == 0) {
+        uint8_t ctrl1 = ism330_read_reg(spi, cs_pin, ISM330_CTRL1_XL);
+        uint8_t ctrl2 = ism330_read_reg(spi, cs_pin, ISM330_CTRL2_G);
+        printf("[ISM330] CONFIG CHECK: CTRL1_XL=0x%02X, CTRL2_G=0x%02X (exp 0x84/0x8C)\n", ctrl1, ctrl2);
     }
     
     // Bit 0 = XLDA (Accel ready), Bit 1 = GDA (Gyro ready)
