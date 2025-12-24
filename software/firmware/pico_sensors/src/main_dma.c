@@ -136,57 +136,53 @@ void cs_irq_handler(uint gpio, uint32_t events) {
         // If we interrupt, `valid_sample_count` won't be incremented yet, so the consumer ignores the partial data.
         // But we need to close the packet properly.
 
-        BatchPacket* p = &batch_buffers[active_idx];
+        // Let's execute logic logically:
+        // 1. Finalize the Current Active Buffer (add headers, checksum).
+        // 2. Swap indices.
+        // 3. Setup DMA for the NEW Ready Buffer.
+        // 4. Reset the NEW Active Buffer.
         
-        // Fill Slow Sensor Data (from Global Cache)
-        p->mag[0] = cached_mag[0];
-        p->mag[1] = cached_mag[1];
-        p->mag[2] = cached_mag[2];
-        p->mag_count = mag_update_counter;
-        p->pressure_raw = cached_pressure_raw;
-        p->tof_mm = cached_tof_mm;
+        // Re-implementing correctly:
+        BatchPacket* finished_pkt = &batch_buffers[active_idx];
         
-        // Fill Header
-        p->magic[0] = BATCH_MAGIC_0;
-        p->magic[1] = BATCH_MAGIC_1;
-        p->frame_id++; // Simple wrapping counter
-        p->timestamp_us = time_us_64(); // Capture time of BATCH COMPLETION
+        finished_pkt->mag[0] = cached_mag[0];
+        finished_pkt->mag[1] = cached_mag[1];
+        finished_pkt->mag[2] = cached_mag[2];
+        finished_pkt->mag_count = mag_update_counter;
+        finished_pkt->pressure_raw = cached_pressure_raw;
+        finished_pkt->tof_mm = cached_tof_mm;
         
-        // Checksum
-        p->checksum = calculate_checksum(p);
+        finished_pkt->magic[0] = BATCH_MAGIC_0;
+        finished_pkt->magic[1] = BATCH_MAGIC_1;
+        finished_pkt->frame_id++; 
+        finished_pkt->timestamp_us = time_us_64();
         
-        // Checksum
-        p->checksum = calculate_checksum(p);
+        finished_pkt->checksum = calculate_checksum(finished_pkt);
         
-        // Perform the Swap
-        uint8_t old_active = active_idx;
-        active_idx = ready_idx; // Old ready becomes new active (empty it first)
-        ready_idx = old_active; // Old active becomes ready
+        // Swap
+        uint8_t temp = active_idx;
+        active_idx = ready_idx;
+        ready_idx = temp;
         
-        // --- CRITICAL FIX: PREPARE TRANSMIT BUFFER ---
-        // Copy the NEW ready packet (was active) to the 32-bit aligned TX buffer with Byte Swap.
-        // This is required because we use 32-bit DMA transfer to a 32-bit PIO shift (MSB first).
+        // Prepare Transmit Buffer (bswap)
         uint32_t* src = (uint32_t*)&batch_buffers[ready_idx];
         uint32_t* dst = spi_tx_buffers[ready_idx];
-        // Ensure we copy enough words. sizeof(BatchPacket) / 4.
         for (int i=0; i<sizeof(BatchPacket)/4; i++) {
              dst[i] = __builtin_bswap32(src[i]);
         }
+        
+        // Start DMA for NEXT transaction (Pipelining)
+        // PIO is still running (we didn't stop it).
+        // Writing to dma_tx triggers transfer to PIO TX FIFO.
+        // PIO will fill its FIFO and wait for clocks.
+        dma_channel_abort(dma_tx); // Ensure clear?
+        dma_channel_set_trans_count(dma_tx, sizeof(BatchPacket)/4, false);
+        dma_channel_set_read_addr(dma_tx, spi_tx_buffers[ready_idx], true); // Trigger
 
-        // Reset the NEW active buffer
-        // batch_buffers[active_idx].valid_sample_count = 0; // Reset count
-        // We do this via pointer to minimize overhead
+        // Reset buffer
         batch_buffers[active_idx].valid_sample_count = 0;
         
-        // Signal Data Ready (host can read now)
         gpio_put(PIN_DATA_READY, 1);
-        
-        // PRE-ARM DMA? No, DMA logic is in Falling Edge or End of Previous?
-        // Actually, DMA setup happens on FALLING EDGE (Start of Transaction).
-        // Since we just swapped 'ready_idx', the next Falling Edge will pick up the new data.
-        // Correct.
-        
-        // Toggle LED for heartbeat
         if (cs_irq_count % 100 == 0) gpio_xor_mask(1u << PIN_LED);
     }
 }
