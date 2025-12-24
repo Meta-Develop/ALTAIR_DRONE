@@ -58,6 +58,10 @@ BatchPacket batch_buffers[2];
 volatile uint8_t active_idx = 0; // The one being written to by Sensors
 volatile uint8_t ready_idx = 1;  // The one read by DMA/SPI
 
+// 32-bit aligned buffers for PIO transmission (fixed size, max 256 bytes for safety)
+// We copy valid data from packet to this buffer with bswap logic.
+uint32_t spi_tx_buffers[2][64]; // 64*4 = 256 bytes capacity
+
 // State for Slow Sensors (cached values to put in every batch)
 int16_t cached_mag[3] = {0};
 uint8_t mag_update_counter = 0;
@@ -151,21 +155,36 @@ void cs_irq_handler(uint gpio, uint32_t events) {
         // Checksum
         p->checksum = calculate_checksum(p);
         
+        // Checksum
+        p->checksum = calculate_checksum(p);
+        
         // Perform the Swap
         uint8_t old_active = active_idx;
         active_idx = ready_idx; // Old ready becomes new active (empty it first)
         ready_idx = old_active; // Old active becomes ready
         
+        // --- CRITICAL FIX: PREPARE TRANSMIT BUFFER ---
+        // Copy the NEW ready packet (was active) to the 32-bit aligned TX buffer with Byte Swap.
+        // This is required because we use 32-bit DMA transfer to a 32-bit PIO shift (MSB first).
+        uint32_t* src = (uint32_t*)&batch_buffers[ready_idx];
+        uint32_t* dst = spi_tx_buffers[ready_idx];
+        // Ensure we copy enough words. sizeof(BatchPacket) / 4.
+        for (int i=0; i<sizeof(BatchPacket)/4; i++) {
+             dst[i] = __builtin_bswap32(src[i]);
+        }
+
         // Reset the NEW active buffer
         // batch_buffers[active_idx].valid_sample_count = 0; // Reset count
         // We do this via pointer to minimize overhead
         batch_buffers[active_idx].valid_sample_count = 0;
         
-        // Signal Data Ready for the NEXT transaction?
-        // We effectively have new data ready immediately after swap if the buffer wasn't empty.
-        // But typically we signal when the buffer is "full enough" or just keep it high?
-        // Let's assert DRDY to tell Host "I have data for you".
+        // Signal Data Ready (host can read now)
         gpio_put(PIN_DATA_READY, 1);
+        
+        // PRE-ARM DMA? No, DMA logic is in Falling Edge or End of Previous?
+        // Actually, DMA setup happens on FALLING EDGE (Start of Transaction).
+        // Since we just swapped 'ready_idx', the next Falling Edge will pick up the new data.
+        // Correct.
         
         // Toggle LED for heartbeat
         if (cs_irq_count % 100 == 0) gpio_xor_mask(1u << PIN_LED);
@@ -363,28 +382,39 @@ int main() {
     // DMA Config
     dma_tx = dma_claim_unused_channel(true);
     dma_channel_config c = dma_channel_get_default_config(dma_tx);
-    channel_config_set_transfer_data_size(&c, DMA_SIZE_8); // 8-bit bytes
+    channel_config_set_transfer_data_size(&c, DMA_SIZE_32); // 32-bit WORDS (for MSB-first shim)
     channel_config_set_read_increment(&c, true);
     channel_config_set_write_increment(&c, false);
     channel_config_set_dreq(&c, pio_get_dreq(pio, sm, true));
     
     dma_channel_configure(dma_tx, &c, 
-                          &pio->txf[sm],     // Dest
-                          &batch_buffers[ready_idx], // Src
-                          0,                 // Don't start yet
+                          &pio->txf[sm],            // Dest
+                          spi_tx_buffers[ready_idx], // Src (32-bit aligned buffer)
+                          0,                        // Don't start yet
                           false);
                           
-    // Interrupts
+    // --- SETUP SENSORS ---
     gpio_init(PIN_CS_SLAVE); gpio_set_dir(PIN_CS_SLAVE, GPIO_IN); gpio_pull_up(PIN_CS_SLAVE);
+    
+    // CRITICAL FIX: explicitly init SCK and MOSI as Inputs for PIO usage
+    gpio_init(PIN_SCK_SLAVE); gpio_set_dir(PIN_SCK_SLAVE, GPIO_IN);
+    gpio_init(PIN_MOSI_SLAVE); gpio_set_dir(PIN_MOSI_SLAVE, GPIO_IN);
+
     gpio_set_irq_enabled_with_callback(PIN_CS_SLAVE, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true, &cs_irq_handler);
 
     // Initial Trigger of DMA+PIO to be ready for first transaction
-    // This ensures MISO is driven even if we miss the first Falling Edge (or if CS is already low)
-    dma_channel_set_trans_count(dma_tx, sizeof(BatchPacket), false);
-    dma_channel_set_read_addr(dma_tx, &batch_buffers[ready_idx], true); // Start DMA
+    // Pre-fill the TX buffer with the first packet
+    // Note: We need to handle the bswap for the initial ready buffer too.
+    uint32_t* src_pkt = (uint32_t*)&batch_buffers[ready_idx];
+    for (int i=0; i<sizeof(BatchPacket)/4; i++) {
+        spi_tx_buffers[ready_idx][i] = __builtin_bswap32(src_pkt[i]);
+    }
+
+    dma_channel_set_trans_count(dma_tx, sizeof(BatchPacket)/4, false); // 32-bit WORDS
+    dma_channel_set_read_addr(dma_tx, spi_tx_buffers[ready_idx], true); // Start DMA
     pio_sm_set_enabled(pio, sm, true); // Enable PIO
 
-    printf("[MAIN] PIO Slave Enabled & DMA Started. Waiting for CS...\n");
+    printf("[MAIN] PIO Slave Enabled & DMA Started (32-bit Mode). Waiting for CS...\n");
     printf("[MAIN] Buffer Magic: %02X %02X\n", batch_buffers[ready_idx].magic[0], batch_buffers[ready_idx].magic[1]);
 
     // --- MAIN LOOP ---
@@ -393,7 +423,7 @@ int main() {
     uint32_t irq_log_counter = 0;
 
     while (true) {
-        // check_imu_data();   // Fast polling (1kHz+) <-- DISABLED for Isolation
+        check_imu_data();   // Fast polling (1kHz+)
         check_slow_sensors();
 
         uint32_t now = time_us_32();

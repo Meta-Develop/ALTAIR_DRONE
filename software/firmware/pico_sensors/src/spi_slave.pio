@@ -40,8 +40,12 @@ static inline void spi_slave_init(PIO pio, uint sm, uint offset, uint pin_miso) 
     pio_gpio_init(pio, pin_miso);
     pio_sm_set_consecutive_pindirs(pio, sm, pin_miso, 1, true); // Output
     
-    // Shift config: LEFT shift (MSB first), no autopull, 8 bits
-    sm_config_set_out_shift(&c, false, false, 8);
+    // Init GPIO for SCK (input, hardcoded as GPIO 18 in PIO program)
+    pio_gpio_init(pio, 18);
+    gpio_set_dir(18, GPIO_IN);
+    
+    // Shift config: LEFT shift (MSB first), no autopull, 32 bits (Data must be MSB-aligned in 32-bit word)
+    sm_config_set_out_shift(&c, false, false, 32);
     
     // Run at full system clock
     sm_config_set_clkdiv(&c, 1.0f);
