@@ -11,8 +11,8 @@
 .program spi_slave
 .wrap_target
     pull block          ; Wait for data (will be 8-bit via DMA)
-    out pins, 1         ; Output MSB (Bit 7) immediately (CPHA=0)
-    set x, 6            ; 7 more bits to loop
+    out pins, 1         ; Output MSB (Bit 31) immediately (CPHA=0)
+    set x, 31           ; 31 more bits to loop (Total 32)
 bitloop:
     wait 1 gpio 18      ; Wait SCK Rising Edge (Master Reads)
     wait 0 gpio 18      ; Wait SCK Falling Edge (Slave Shifts)
