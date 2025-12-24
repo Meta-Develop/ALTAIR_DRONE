@@ -329,6 +329,7 @@ int main() {
     gpio_set_function(PIN_SCL, GPIO_FUNC_I2C); gpio_pull_up(PIN_SCL);
     
     spi_init(spi1, 8000000);
+    spi_set_format(spi1, 8, SPI_CPOL_1, SPI_CPHA_1, SPI_MSB_FIRST);  // Mode 3 for ISM330DHCX
     gpio_set_function(PIN_MISO_SENSOR, GPIO_FUNC_SPI);
     gpio_set_function(PIN_MOSI_SENSOR, GPIO_FUNC_SPI);
     gpio_set_function(PIN_SCK_SENSOR, GPIO_FUNC_SPI);
@@ -339,7 +340,6 @@ int main() {
     setup_sensors();
     
     // Setup PIO/DMA Slave
-    gpio_init(PIN_MISO_SLAVE); 
     offset = pio_add_program(pio, &spi_slave_program);
     spi_slave_init(pio, sm, offset, PIN_MISO_SLAVE);
     
@@ -375,7 +375,7 @@ int main() {
         uint32_t now = time_us_32();
         if (now - last_print > 1000000) {
             last_print = now;
-            printf("SENSOR_ALIVE\n");
+            printf("SENSOR_ALIVE CS=%lu\n", cs_irq_count);
         }
         // No sleep. Run as fast as possible.
         // check_imu_data polls status reg, so it won't spinlock excessively on SPI bus logic.
