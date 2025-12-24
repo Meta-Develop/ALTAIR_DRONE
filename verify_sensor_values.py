@@ -31,34 +31,56 @@ def test_sensor():
     rx = bytearray(rx_buf)
     
     try:
-        # Scan for Magic 0x55AA (AA 55 in LE) to handle alignment shifts
-        offset = -1
-        for i in range(0, len(rx)-1):
-            if rx[i] == 0xAA and rx[i+1] == 0x55:
-                offset = i
-                break
+        # Check standard Magic (AA 55 in LE -> 0x55AA)
+        offset_std = -1
+        offset_swap = -1
         
-        if offset >= 0:
-            magic = struct.unpack_from('<H', rx, offset)[0]
-            if offset + 13 < len(rx):
-                frame_id = struct.unpack_from('<H', rx, offset+2)[0]
-                timestamp = struct.unpack_from('<Q', rx, offset+4)[0]
-                count = rx[offset+12]
+        for i in range(0, len(rx)-3):
+            # Standard: AA 55
+            if rx[i] == 0xAA and rx[i+1] == 0x55:
+                offset_std = i
+                break
+            # Swapped: 55 AA (Word Swap artifact)
+            if rx[i] == 0x55 and rx[i+1] == 0xAA:
+                offset_swap = i
+                break
                 
-                print(f"Header: OK (Offset {offset}). ID={frame_id}, Time={timestamp/1e6:.3f}s, Count={count}")
-                if count > 0:
-                    print(f"  SUCCESS: Received {count} samples!")
-                    
-                    # Decode Samples if requested
-                    # sample_start = offset + 13
-                    # ... decoding logic ...
-                else:
-                    print("  WARNING: Count=0. Sensors idle.")
-            else:
-                 print(f"  Found Magic at {offset} but packet truncated.")
+        if offset_std >= 0:
+            print(f"  Types: Standard Order found at Offset {offset_std}")
+            base = offset_std
+            # Decode Standard
+            magic = struct.unpack_from('<H', rx, base)[0]
+            if base + 13 < len(rx):
+                frame_id = struct.unpack_from('<H', rx, base+2)[0]
+                timestamp = struct.unpack_from('<Q', rx, base+4)[0]
+                count = rx[base+12]
+                print(f"  Header: OK. ID={frame_id}, Time={timestamp/1e6:.3f}s, Count={count}")
+                if count > 0: print(f"  SUCCESS: Received {count} samples!")
+                else: print("  WARNING: Count=0")
+
+        elif offset_swap >= 0:
+            print(f"  Type: Swapped Order found at Offset {offset_swap}")
+            # Unswap 16-bit words: [A, B] -> [B, A]
+            # Actually, if we see 55 AA, it means buffer has 55 AA instead of AA 55.
+            # We can re-pack correctly.
+            # Only need to unswap the region we care about.
+            valid_len = len(rx) - offset_swap
+            unswapped = bytearray(valid_len)
+            for j in range(0, valid_len-1, 2):
+                unswapped[j] = rx[offset_swap+j+1]
+                unswapped[j+1] = rx[offset_swap+j]
+                
+            # Now decode standard from unswapped[0]
+            frame_id = struct.unpack_from('<H', unswapped, 2)[0]
+            timestamp = struct.unpack_from('<Q', unswapped, 4)[0]
+            count = unswapped[12]
+            
+            print(f"  Header: OK (Swapped). ID={frame_id}, Time={timestamp/1e6:.3f}s, Count={count}")
+            if count > 0: print(f"  SUCCESS: Received {count} samples!")
+            else: print("  WARNING: Count=0")
+            
         else:
-            magic_le = struct.unpack_from('<H', rx, 0)[0]
-            print(f"  FAILURE: Invalid Magic {hex(magic_le)} (Expected 0x55aa) - No Magic found.")
+            print(f"  FAILURE: No valid magic found.")
             print(f"  Raw: {rx[:16].hex()}...")
 
     except Exception as e:
