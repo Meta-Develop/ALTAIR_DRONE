@@ -342,7 +342,7 @@ int main() {
     gpio_set_function(PIN_SCL, GPIO_FUNC_I2C); gpio_pull_up(PIN_SCL);
     
     spi_init(spi1, 8000000);
-    spi_set_format(spi1, 8, SPI_CPOL_1, SPI_CPHA_1, SPI_MSB_FIRST);  // Mode 3 for ISM330DHCX
+    // spi_set_format(spi1, 8, SPI_CPOL_1, SPI_CPHA_1, SPI_MSB_FIRST);  // Mode 3 for ISM330DHCX (Temporarily Disabled)
     gpio_set_function(PIN_MISO_SENSOR, GPIO_FUNC_SPI);
     gpio_set_function(PIN_MOSI_SENSOR, GPIO_FUNC_SPI);
     gpio_set_function(PIN_SCK_SENSOR, GPIO_FUNC_SPI);
