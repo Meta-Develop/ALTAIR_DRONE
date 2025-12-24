@@ -48,15 +48,32 @@ bool ism330_init(spi_inst_t *spi, uint cs_pin) {
     }
     
     // Software Reset (CTRL3_C bit 0)
+    printf("[ISM330] Performing SW Reset...\n");
     ism330_write_reg(spi, cs_pin, ISM330_CTRL3_C, 0x01);
-    sleep_ms(10);
+    
+    // Wait for reset to complete (SW_RESET bit auto-clears)
+    int timeout = 100;
+    while (timeout-- > 0) {
+        sleep_ms(1);
+        uint8_t ctrl3 = ism330_read_reg(spi, cs_pin, ISM330_CTRL3_C);
+        if ((ctrl3 & 0x01) == 0) {
+            printf("[ISM330] Reset complete (CTRL3_C=0x%02X after %d ms)\n", ctrl3, 100 - timeout);
+            break;
+        }
+    }
+    if (timeout <= 0) {
+        printf("[ISM330] Reset timeout!\n");
+    }
+    sleep_ms(50);  // Extra stabilization time
     
     // Configure Accelerometer: 1.66kHz ODR, ±16g
     // CTRL1_XL = ODR[7:4] + FS[3:2] + LPF2_XL_EN[1] + 0
+    printf("[ISM330] Writing CTRL1_XL=0x%02X...\n", ISM330_ODR_1660HZ | ISM330_FS_XL_16G);
     ism330_write_reg(spi, cs_pin, ISM330_CTRL1_XL, ISM330_ODR_1660HZ | ISM330_FS_XL_16G);
     
     // Configure Gyroscope: 1.66kHz ODR, ±2000dps
     // CTRL2_G = ODR[7:4] + FS[3:2] + FS_125[1] + 0
+    printf("[ISM330] Writing CTRL2_G=0x%02X...\n", ISM330_ODR_1660HZ | ISM330_FS_G_2000DPS);
     ism330_write_reg(spi, cs_pin, ISM330_CTRL2_G, ISM330_ODR_1660HZ | ISM330_FS_G_2000DPS);
     
     // CTRL3_C: Block Data Update (BDU) enable, auto-increment
