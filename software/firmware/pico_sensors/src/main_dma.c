@@ -86,25 +86,12 @@ uint8_t calculate_checksum(const BatchPacket* p) {
     return xor_sum;
 }
 
-volatile uint32_t sck_activity_count = 0;
-
 // --- INTERRUPT HANDLERS ---
 void cs_irq_handler(uint gpio, uint32_t events) {
-    if (gpio == PIN_SCK_SLAVE) {
-        // SCK Edge Detected!
-        sck_activity_count++;
-        // Disable SCK IRQ immediately to avoid flooding (only need to know if it's toggling)
-        gpio_set_irq_enabled(PIN_SCK_SLAVE, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, false);
-        return;
-    }
-
     if (gpio != PIN_CS_SLAVE) return;
 
     // 1. FALLING EDGE: Start of Transaction (Host asserts CS)
     if (events & GPIO_IRQ_EDGE_FALL) {
-        // Enable SCK monitoring for this new transaction
-        gpio_set_irq_enabled(PIN_SCK_SLAVE, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
-
         gpio_put(PIN_DATA_READY, 0); // Clear DRDY (we are modifying data lines now)
         
         // Reset and Restart PIO state machine
@@ -131,10 +118,6 @@ void cs_irq_handler(uint gpio, uint32_t events) {
     // 2. RISING EDGE: End of Transaction (Host releases CS)
     else if (events & GPIO_IRQ_EDGE_RISE) {
         cs_irq_count++;
-        // Disable SCK IRQ if it wasn't triggered (prevent stray interrupts)
-        gpio_set_irq_enabled(PIN_SCK_SLAVE, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, false);
-
-        // ... rest of logic ...
         
         // SWAP BUFFERS
         // We just sent 'ready_idx'. Now 'active_idx' (which has been filling) should become 'ready'.
@@ -188,6 +171,9 @@ void cs_irq_handler(uint gpio, uint32_t events) {
         if (cs_irq_count % 100 == 0) gpio_xor_mask(1u << PIN_LED);
     }
 }
+
+// --- SETUP SENSORS ---
+
 
 // --- SETUP SENSORS ---
 void setup_sensors() {
@@ -407,7 +393,7 @@ int main() {
     uint32_t irq_log_counter = 0;
 
     while (true) {
-        check_imu_data();   // Fast polling (1kHz+)
+        // check_imu_data();   // Fast polling (1kHz+) <-- DISABLED for Isolation
         check_slow_sensors();
 
         uint32_t now = time_us_32();
@@ -416,13 +402,13 @@ int main() {
             
             // Debug: Check if CS Interrupts are firing
             if (cs_irq_count != last_cs_count) {
-                printf("[MAIN] CS IRQ Count: %lu (Delta: %lu) | SCK Activity: %lu\n", 
-                       cs_irq_count, cs_irq_count - last_cs_count, sck_activity_count);
+                printf("[MAIN] CS IRQ Count: %lu (Delta: %lu)\n", 
+                       cs_irq_count, cs_irq_count - last_cs_count);
                 last_cs_count = cs_irq_count;
             } else {
                  // Print CS Pin State to see if it's stuck
-                 printf("[MAIN] CS Idle. Pin State: %d. IRQ Count: %lu | SCK Activity: %lu\n", 
-                        gpio_get(PIN_CS_SLAVE), cs_irq_count, sck_activity_count);
+                 printf("[MAIN] CS Idle. Pin State: %d. IRQ Count: %lu\n", 
+                        gpio_get(PIN_CS_SLAVE), cs_irq_count);
             }
             last_log = now;
         }
