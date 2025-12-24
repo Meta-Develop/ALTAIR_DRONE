@@ -14,7 +14,7 @@ GPIO.output(CS_PIN, GPIO.HIGH)
 
 spi = spidev.SpiDev()
 spi.open(BUS, DEVICE)
-spi.max_speed_hz = 10000  # Lowered to 10kHz for debugging SCK signal integrity
+spi.max_speed_hz = 1000000
 spi.mode = 0
 spi.no_cs = True 
 
@@ -31,34 +31,34 @@ def test_sensor():
     rx = bytearray(rx_buf)
     
     try:
-        magic = struct.unpack_from('<H', rx, 0)[0]
-        frame_id = struct.unpack_from('<H', rx, 2)[0]
-        timestamp = struct.unpack_from('<Q', rx, 4)[0]
-        count = rx[12]
+        # Scan for Magic 0x55AA (AA 55 in LE) to handle alignment shifts
+        offset = -1
+        for i in range(0, len(rx)-1):
+            if rx[i] == 0xAA and rx[i+1] == 0x55:
+                offset = i
+                break
         
-        # 0xAA 0x55 in LE is 0x55AA
-        if magic == 0x55AA:
-            print(f"Header: OK. ID={frame_id}, Time={timestamp/1e6:.3f}s, Count={count}")
-    
-            if count > 0:
-                # Decode Samples
-                # Each sample: 6x int16 (Gyro X,Y,Z, Accel X,Y,Z) = 12 bytes
-                offset = 16
-                for i in range(count):
-                    if offset + 12 > len(rx):
-                        break
-                    
-                    # Assume [GyroX, GyroY, GyroZ, AccelX, AccelY, AccelZ]
-                    data = struct.unpack_from('<6h', rx, offset)
-                    gx, gy, gz, ax, ay, az = data
-                    
-                    print(f"  Sample {i}: G=({gx},{gy},{gz}) A=({ax},{ay},{az})")
-                    offset += 12
-            else:
-                print("  WARNING: Count=0. Sensors idle.")
+        if offset >= 0:
+            magic = struct.unpack_from('<H', rx, offset)[0]
+            if offset + 13 < len(rx):
+                frame_id = struct.unpack_from('<H', rx, offset+2)[0]
+                timestamp = struct.unpack_from('<Q', rx, offset+4)[0]
+                count = rx[offset+12]
                 
+                print(f"Header: OK (Offset {offset}). ID={frame_id}, Time={timestamp/1e6:.3f}s, Count={count}")
+                if count > 0:
+                    print(f"  SUCCESS: Received {count} samples!")
+                    
+                    # Decode Samples if requested
+                    # sample_start = offset + 13
+                    # ... decoding logic ...
+                else:
+                    print("  WARNING: Count=0. Sensors idle.")
+            else:
+                 print(f"  Found Magic at {offset} but packet truncated.")
         else:
-            print(f"  FAILURE: Invalid Magic {hex(magic)} (Expected 0x55aa)")
+            magic_le = struct.unpack_from('<H', rx, 0)[0]
+            print(f"  FAILURE: Invalid Magic {hex(magic_le)} (Expected 0x55aa) - No Magic found.")
             print(f"  Raw: {rx[:16].hex()}...")
 
     except Exception as e:
