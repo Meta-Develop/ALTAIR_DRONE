@@ -16,12 +16,12 @@ s.open(0, 0)
 s.mode = 0
 s.no_cs = True
 
-for SPI_SPEED in [1_000_000, 2_000_000, 4_000_000, 8_000_000]:
-    s.max_speed_hz = SPI_SPEED
+for CS_DELAY in [0.00005, 0.0001, 0.0002, 0.0005]:  # 50us, 100us, 200us, 500us
+    s.max_speed_hz = 1_000_000  # Use 1MHz
     successes = 0
     for i in range(100):
         GPIO.output(CS_PIN, 0)
-        time.sleep(0.00002)  # 20us
+        time.sleep(CS_DELAY)
         rx = s.xfer2([0]*128)
         GPIO.output(CS_PIN, 1)
         
@@ -29,7 +29,7 @@ for SPI_SPEED in [1_000_000, 2_000_000, 4_000_000, 8_000_000]:
         if 0xAA in rx[:4] or 0x55 in rx[:4]:
             successes += 1
         time.sleep(0.001)  # 1ms between reads
-    print(f"{SPI_SPEED/1_000_000}MHz: {successes}/100")
+    print(f"CS Delay {CS_DELAY*1e6:.0f}us @ 1MHz: {successes}/100")
 
 s.close()
 GPIO.cleanup()
