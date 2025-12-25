@@ -32,57 +32,63 @@
 #define MMC5983_SENS_UT (0.0244f)
 #define MMC5983_SENS_TESLA (MMC5983_SENS_UT / 1000000.0f) 
 
-class SysfsGPIO {
+// Modern GPIO using libgpiod (replaces deprecated sysfs)
+#include <gpiod.h>
+
+class GpiodLine {
 public:
-    SysfsGPIO(int pin, bool input) : pin_(pin) {
-        int fd_un = open("/sys/class/gpio/unexport", O_WRONLY);
-        if (fd_un >= 0) {
-            std::string s = std::to_string(pin);
-            write(fd_un, s.c_str(), s.length());
-            close(fd_un);
-        }
-        usleep(50000); 
-
-        int fd = open("/sys/class/gpio/export", O_WRONLY);
-        if (fd >= 0) {
-            std::string s = std::to_string(pin);
-            write(fd, s.c_str(), s.length());
-            close(fd);
-        } else {
-            std::cerr << "GPIO Export Failed: " << pin << std::endl;
+    GpiodLine(int pin, bool input) : pin_(pin), chip_(nullptr), line_(nullptr) {
+        // Open GPIO chip (gpiochip0 for RPi4)
+        chip_ = gpiod_chip_open("/dev/gpiochip0");
+        if (!chip_) {
+            std::cerr << "GPIOD: Failed to open chip" << std::endl;
+            return;
         }
         
-        std::string path_dir = "/sys/class/gpio/gpio" + std::to_string(pin) + "/direction";
-        int retries = 0;
-        while (access(path_dir.c_str(), F_OK) == -1 && retries < 10) { usleep(50000); retries++; }
-
-        fd = open(path_dir.c_str(), O_WRONLY);
-        if (fd >= 0) {
-            if (input) write(fd, "in", 2);
-            else       write(fd, "out", 3);
-            close(fd);
-        } else {
-            std::cerr << "GPIO Direction Failed: " << path_dir << std::endl;
+        // Get line
+        line_ = gpiod_chip_get_line(chip_, pin);
+        if (!line_) {
+            std::cerr << "GPIOD: Failed to get line " << pin << std::endl;
+            return;
         }
         
-        std::string path_val = "/sys/class/gpio/gpio" + std::to_string(pin) + "/value";
-        fd_ = open(path_val.c_str(), O_RDWR);
-        if (fd_ < 0) std::cerr << "GPIO Value Open Failed: " << path_val << std::endl;
+        // Request line as output (for CS) or input
+        int ret;
+        if (input) {
+            ret = gpiod_line_request_input(line_, "spi_bridge");
+        } else {
+            ret = gpiod_line_request_output(line_, "spi_bridge", 1); // Start HIGH (CS inactive)
+        }
+        
+        if (ret < 0) {
+            std::cerr << "GPIOD: Failed to request line " << pin << std::endl;
+        }
     }
-
-    ~SysfsGPIO() { if (fd_ >= 0) close(fd_); }
-    int get_fd() const { return fd_; }
+    
+    ~GpiodLine() {
+        if (line_) gpiod_line_release(line_);
+        if (chip_) gpiod_chip_close(chip_);
+    }
+    
     void setValue(int val) {
-        if (fd_ >= 0) {
-            std::string s = std::to_string(val);
-            write(fd_, s.c_str(), s.length());
+        if (line_) {
+            gpiod_line_set_value(line_, val);
         }
     }
-    void clear() { if (fd_ >= 0) { lseek(fd_,0,SEEK_SET); char b[2]; read(fd_,b,2); } }
+    
+    int getValue() {
+        if (line_) {
+            return gpiod_line_get_value(line_);
+        }
+        return -1;
+    }
+    
+    void clear() { /* No-op for gpiod */ }
 
 private:
     int pin_;
-    int fd_ = -1;
+    struct gpiod_chip* chip_;
+    struct gpiod_line* line_;
 };
 
 class SpiBridgeNode : public rclcpp::Node {
@@ -103,10 +109,10 @@ public:
         // Initialize Notch Filters (3 Axis)
         filters_.init3Axis();
 
-        // Hardware Init
-        gpio_ready_ = std::make_unique<SysfsGPIO>(24, true);  // Pin 18 (GPIO 24)
-        gpio_cs_ = std::make_unique<SysfsGPIO>(25, false);    // Pin 22 (GPIO 25)
-        gpio_cs_->setValue(1);
+        // Hardware Init using libgpiod
+        gpio_ready_ = std::make_unique<GpiodLine>(24, true);  // Pin 18 (GPIO 24) - Data Ready input
+        gpio_cs_ = std::make_unique<GpiodLine>(25, false);    // Pin 22 (GPIO 25) - CS output
+        gpio_cs_->setValue(1); // CS inactive (HIGH)
         
         spi_fd_ = open("/dev/spidev0.0", O_RDWR);
         if (spi_fd_ < 0) RCLCPP_ERROR(this->get_logger(), "SPI Open Failed");
@@ -358,8 +364,8 @@ private:
         tof_pub_->publish(tof_msg);
     }
 
-    std::unique_ptr<SysfsGPIO> gpio_ready_;
-    std::unique_ptr<SysfsGPIO> gpio_cs_;
+    std::unique_ptr<GpiodLine> gpio_ready_;
+    std::unique_ptr<GpiodLine> gpio_cs_;
     int spi_fd_ = -1;
     std::thread poll_thread_;
     std::atomic<bool> running_;

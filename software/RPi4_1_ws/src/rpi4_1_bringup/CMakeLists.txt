@@ -15,6 +15,7 @@ include_directories(../../../common)
 
 add_executable(spi_bridge_cpp src/spi_bridge.cpp)
 ament_target_dependencies(spi_bridge_cpp rclcpp std_msgs sensor_msgs altair_interfaces)
+target_link_libraries(spi_bridge_cpp gpiod)
 
 install(TARGETS
   spi_bridge_cpp
