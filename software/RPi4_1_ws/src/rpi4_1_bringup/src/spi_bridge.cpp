@@ -200,7 +200,7 @@ private:
          // Python uses xfer2 which keeps CS low? No, manual CS.
          // This ioctl is the xfer.
          
-         tr.speed_hz = 4000000; // 4MHz -> ~272us for 136 bytes
+         tr.speed_hz = 1000000; // 1MHz -> ~1ms for 136 bytes (Max ~900Hz loop)
          tr.bits_per_word = 8;
          
          int ret = ioctl(spi_fd_, SPI_IOC_MESSAGE(1), &tr);
