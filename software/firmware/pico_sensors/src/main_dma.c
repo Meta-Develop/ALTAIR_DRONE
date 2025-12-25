@@ -420,7 +420,7 @@ int main() {
 
     while (true) {
         check_imu_data();   // Fast polling (1kHz+)
-        check_slow_sensors();
+        // check_slow_sensors(); // Disabled for rate testing
 
         uint32_t now = time_us_32();
         if (now - last_log > 1000000) { // 1Hz heartbeat
