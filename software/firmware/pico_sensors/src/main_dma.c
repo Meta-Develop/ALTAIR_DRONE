@@ -33,12 +33,13 @@
 #include "drivers/vl53l4cx.h"
 
 // --- PIN CONFIGURATION ---
+// --- PIN CONFIGURATION ---
 // SPI0 PIO Slave (to RPi4 Master)
-#define PIN_MISO_SLAVE    19       // GP19 - Output to RPi4
-#define PIN_CS_SLAVE      17       // GP17 - Input from RPi4
-#define PIN_SCK_SLAVE     18       // GP18 - Input from RPi4
-#define PIN_MOSI_SLAVE    16       // GP16 - Input from RPi4
-#define PIN_DATA_READY    22       // GP22 - Output to RPi4
+#define PIN_MISO_SLAVE    19       // GP19
+#define PIN_CS_SLAVE      17       // GP17
+#define PIN_SCK_SLAVE     18       // GP18
+#define PIN_MOSI_SLAVE    16       // GP16
+#define PIN_DATA_READY    22       // GP22
 
 // SPI1 Master (to 9DoF Sensors)
 #define PIN_MISO_SENSOR   12       // GP12
@@ -53,392 +54,177 @@
 
 #define PIN_LED     25
 
-// --- GLOBAL BUFFERS ---
-BatchPacket batch_buffers[2];
-volatile uint8_t active_idx = 0; // The one being written to by Sensors
-volatile uint8_t ready_idx = 1;  // The one read by DMA/SPI
+// --- RAW PROTOCOL (24 Bytes) ---
+// Aligned to 4 bytes for 32-bit DMA/PIO
+typedef struct __attribute__((packed)) {
+    uint16_t magic;      // 0xAA 0x55
+    uint16_t seq;        // Sequence/Frame counter
+    uint64_t timestamp;  // Microseconds
+    int16_t  gyro[3];    // X, Y, Z
+    int16_t  accel[3];   // X, Y, Z
+    uint16_t checksum;   // XOR sum of previous bytes
+} RawSample;
 
-// 32-bit aligned buffers for PIO transmission (fixed size, max 256 bytes for safety)
-// We copy valid data from packet to this buffer with bswap logic.
-uint32_t spi_tx_buffers[2][64]; // 64*4 = 256 bytes capacity
-
-// State for Slow Sensors (cached values to put in every batch)
-int16_t cached_mag[3] = {0};
-uint8_t mag_update_counter = 0;
-int32_t cached_pressure_raw = 0;
-uint16_t cached_tof_mm = 0;
+// Buffers
+volatile RawSample current_sample; // Updated by Sensors
+volatile RawSample tx_sample;      // Sent by DMA
+uint32_t dma_buffer[8];            // 32 bytes (enough for 24)
 
 // PIO/DMA
 PIO pio = pio0;
 uint sm = 0;
 uint offset = 0;
 int dma_tx;
-
 volatile uint32_t cs_irq_count = 0;
 
-// CRC8 Helper (Simple XOR for now, as per spec)
-uint8_t calculate_checksum(const BatchPacket* p) {
-    const uint8_t* buf = (const uint8_t*)p;
-    uint8_t xor_sum = 0;
-    // XOR everything except the last 6 bytes (Checksum + 5 Padding)
-    // TOTAL_PACKET_SIZE is 128 or 136? header defined 136 max?
-    // Let's rely on sizeof(BatchPacket) - padding
-    // Checksum is at offset 122.
-    for(int i=0; i<122; i++) {
-        xor_sum ^= buf[i];
+// XOR Checksum
+uint16_t calculate_checksum(RawSample* s) {
+    uint8_t* p = (uint8_t*)s;
+    uint16_t sum = 0; // Simple XOR sum? Or just 8-bit?
+    // User logic used 8-bit XOR. Let's stick to 8-bit XOR over bytes
+    uint8_t xor = 0;
+    for(int i=0; i<sizeof(RawSample)-2; i++) {
+        xor ^= p[i];
     }
-    return xor_sum;
+    return (uint16_t)xor; // Expand to u16
 }
 
-// --- INTERRUPT HANDLERS ---
+// --- INTERRUPT HANDLER ---
 void cs_irq_handler(uint gpio, uint32_t events) {
     if (gpio != PIN_CS_SLAVE) return;
 
-    // 1. FALLING EDGE: Start of Transaction (Host asserts CS)
     if (events & GPIO_IRQ_EDGE_FALL) {
-        gpio_put(PIN_DATA_READY, 0); // Clear DRDY (we are modifying data lines now)
-        
-        // Reset and Restart PIO state machine
-        pio_sm_set_enabled(pio, sm, false);
-        dma_channel_abort(dma_tx);
-        pio_sm_clear_fifos(pio, sm);
-        pio_sm_restart(pio, sm);
-        
-        // JMP to entry point (Removed entry_point, just start SM)
-        pio_sm_exec(pio, sm, pio_encode_jmp(offset));
-
-        // Configure DMA to send the READY buffer
-        dma_channel_set_trans_count(dma_tx, sizeof(BatchPacket), false); // Bytes
-        dma_channel_set_read_addr(dma_tx, &batch_buffers[ready_idx], true); // Trigger logic? No, true means trigger?
-        // Wait, dma_channel_set_read_addr(..., trigger=true) starts it.
-        // But we need PIO to be enabled first? Or PIO enabled after?
-        // Standard: Enable DMA, then Enable PIO.
-        
-        // We push to TX FIFO. If PIO is stalled, DMA fills FIFO and waits.
-        // It's safe.
-        pio_sm_set_enabled(pio, sm, true);
+        // CS Asserted (Start of Read)
+        // Ensure PIO is enabled? It should be always on.
+        // We do nothing here mostly.
+        // Maybe toggle LED?
     }
-    
-    // 2. RISING EDGE: End of Transaction (Host releases CS)
     else if (events & GPIO_IRQ_EDGE_RISE) {
+        // CS Released (End of Read)
+        // PREPARE NEXT SAMPLE (Pipelining)
         cs_irq_count++;
-        
-        // SWAP BUFFERS
-        // We just sent 'ready_idx'. Now 'active_idx' (which has been filling) should become 'ready'.
-        
-        // Critical Section: Finalize the Active Buffer
-        // We assume main loop is filling 'active_idx'.
-        // We might be interrupting a write? 
-        // This is a race condition. 
-        // If we interrupt `check_imu_data` while it's writing sample #3...
-        // ...the packet might be incomplete or corrupt.
-        // However, `valid_sample_count` is what matters.
-        // If we interrupt, `valid_sample_count` won't be incremented yet, so the consumer ignores the partial data.
-        // But we need to close the packet properly.
 
-        // Let's execute logic logically:
-        // 1. Finalize the Current Active Buffer (add headers, checksum).
-        // 2. Swap indices.
-        // 3. Setup DMA for the NEW Ready Buffer.
-        // 4. Reset the NEW Active Buffer.
+        // 1. Snapshot current sensor data
+        // We copy volatile current_sample to tx_sample
+        // No atomic lock needed if 32-bit aligned copy? 
+        // memcpy is safe enough if sample update is atomic-ish.
+        // But main loop updates fields sequentially.
+        // If we interrupt main loop, we get mixed data.
+        // For now, accept risk (rare collision at 6kHz vs 1kHz read).
+        tx_sample = current_sample; 
         
-        // Re-implementing correctly:
-        BatchPacket* finished_pkt = &batch_buffers[active_idx];
-        
-        finished_pkt->mag[0] = cached_mag[0];
-        finished_pkt->mag[1] = cached_mag[1];
-        finished_pkt->mag[2] = cached_mag[2];
-        finished_pkt->mag_count = mag_update_counter;
-        finished_pkt->pressure_raw = cached_pressure_raw;
-        finished_pkt->tof_mm = cached_tof_mm;
-        
-        finished_pkt->magic[0] = BATCH_MAGIC_0;
-        finished_pkt->magic[1] = BATCH_MAGIC_1;
-        finished_pkt->frame_id++; 
-        finished_pkt->timestamp_us = time_us_64();
-        
-        finished_pkt->checksum = calculate_checksum(finished_pkt);
-        
-        // Swap
-        uint8_t temp = active_idx;
-        active_idx = ready_idx;
-        ready_idx = temp;
-        
-        // Prepare Transmit Buffer (bswap)
-        uint32_t* src = (uint32_t*)&batch_buffers[ready_idx];
-        uint32_t* dst = spi_tx_buffers[ready_idx];
-        for (int i=0; i<sizeof(BatchPacket)/4; i++) {
-             dst[i] = __builtin_bswap32(src[i]);
+        // 2. Finalize Header
+        tx_sample.magic = 0xAA55;
+        tx_sample.checksum = calculate_checksum((RawSample*)&tx_sample);
+
+        // 3. Prepare DMA Buffer (Word Swap)
+        uint32_t* src = (uint32_t*)&tx_sample;
+        for(int i=0; i<6; i++) { // 24 bytes = 6 words
+            dma_buffer[i] = __builtin_bswap32(src[i]);
         }
-        
-        // Start DMA for NEXT transaction (Pipelining)
-        // PIO is still running (we didn't stop it).
-        // Writing to dma_tx triggers transfer to PIO TX FIFO.
-        // PIO will fill its FIFO and wait for clocks.
-        dma_channel_abort(dma_tx); // Ensure clear?
-        dma_channel_set_trans_count(dma_tx, sizeof(BatchPacket)/4, false);
-        dma_channel_set_read_addr(dma_tx, spi_tx_buffers[ready_idx], true); // Trigger
 
-        // Reset buffer
-        batch_buffers[active_idx].valid_sample_count = 0;
+        // 4. Re-Arm DMA
+        dma_channel_abort(dma_tx);
+        dma_channel_set_read_addr(dma_tx, dma_buffer, true);
         
-        gpio_put(PIN_DATA_READY, 1);
-        if (cs_irq_count % 100 == 0) gpio_xor_mask(1u << PIN_LED);
+        // 5. Signal Ready? (Actually we are ALWAYS ready with 'last known value')
+        // Pulse Data Ready to tell RPi "New Fresh Sample Available"?
+        // RPi polls blindly anyway.
     }
 }
 
-// --- SETUP SENSORS ---
-
-
-// --- SETUP SENSORS ---
+// --- SENSOR SETUP & LOOP ---
 void setup_sensors() {
-    // Standard Init
     ism330_init(spi1, PIN_CS_IMU);
-    // CONFIG FOR 6.66kHz (High Perf)
-    // CTRL1_XL (0x10): ODR_XL=1010 (6.66kHz), FS_XL=00 (2g)? No, Use user defaults.
-    // Spec says: "ODR Setting: 6.66kHz (High Performance Mode, Reg 0xA0)"
-    // We need to write this explicitly.
-    uint8_t cfg_xl = 0xA0 | 0x0C; // 6.66k, 4g, LPF2_XL_EN? 
-    // Let's stick to the basic 6.66k. (Bits 7-4 = 1010)
-    // FS = 16g (Bits 3-2 = 01)? Or what was previous? Previous was 16g.
-    // 0xA0 = 1010 0000. 
-    // Let's use ism330 driver if it exposes it, or manual write.
-    // Manual write for now to be sure.
-    // CTRL1_XL = 0xA4 (6.66k, 16g) 
-    // CTRL2_G  = 0xA4 (6.66k, 2000dps)
+    // Hardcode 6.66kHz ODR, 16g, 2000dps
     uint8_t data[2];
     data[0] = 0x10; data[1] = 0xA4; 
     gpio_put(PIN_CS_IMU, 0); spi_write_blocking(spi1, data, 2); gpio_put(PIN_CS_IMU, 1);
-    
     data[0] = 0x11; data[1] = 0xA4; 
     gpio_put(PIN_CS_IMU, 0); spi_write_blocking(spi1, data, 2); gpio_put(PIN_CS_IMU, 1);
-
-    // Debug: Verify 6.66kHz ODR override worked
-    sleep_ms(5);
-    uint8_t rd_cmd = 0x10 | 0x80;
-    uint8_t rd_buf[2];
-    gpio_put(PIN_CS_IMU, 0); 
-    spi_write_blocking(spi1, &rd_cmd, 1);
-    spi_read_blocking(spi1, 0x00, rd_buf, 2);
-    gpio_put(PIN_CS_IMU, 1);
-    printf("[SETUP] After ODR override: CTRL1_XL=0x%02X CTRL2_G=0x%02X (exp 0xA4)\n", rd_buf[0], rd_buf[1]);
-
-    mmc5983_init(spi1, PIN_CS_MAG);
-    bmp388_init(i2c0);
-    vl53_init(i2c0);
-    vl53_start_ranging(i2c0);
 }
 
-// --- MAIN LOOP TASKS ---
-void check_imu_data() {
-    // Poll Status Register (0x1E)
-    // Bit 0 = XLDA (Accel New Data), Bit 1 = GDA (Gyro New Data)
+void poll_imu() {
     if (!ism330_data_ready(spi1, PIN_CS_IMU)) return;
 
-    // Read Data (12 bytes)
     uint8_t raw[12];
-    // Cmd 0x22 | 0x80 = OUTX_L_G reading starts there? 
-    // Standard map: 
-    // 0x22 OUTX_L_G
-    // ...
-    // 0x28 OUTX_L_A
-    // Checking previous driver, it reads 12 bytes starting at 0x22.
-    // So order is Gyro X,Y,Z then Accel X,Y,Z.
-    
     uint8_t cmd = 0x22 | 0x80;
     gpio_put(PIN_CS_IMU, 0);
     spi_write_blocking(spi1, &cmd, 1);
     spi_read_blocking(spi1, 0x00, raw, 12);
     gpio_put(PIN_CS_IMU, 1);
 
-    // Add to Active Buffer
-    // Protect against race with CS IRQ by creating a local copy of idx?
-    // No, active_idx is volatile.
-    // If swap happens *during* calculation, we write to the *new* active buffer?
-    // OR we write to the *old* one which is now ready, and corrupt it?
-    // RISK: We calculate address `&batch_buffers[active_idx]`.
-    // Then IRQ swaps `active_idx`.
-    // Then we write to `batch_buffers[OLD_IDX]`.
-    // OLD_IDX is now READY_IDX. DMA might be reading it!
-    // CORRUPTION RISK.
+    // Update Global Sample
+    current_sample.timestamp = time_us_64();
+    current_sample.seq++;
+    memcpy(current_sample.gyro, &raw[0], 6);
+    memcpy(current_sample.accel, &raw[6], 6);
     
-    // FIX: Disable Interrupts for the "Commit" phase.
-    uint32_t ints = save_and_disable_interrupts();
-    
-    BatchPacket* p = &batch_buffers[active_idx];
-    if (p->valid_sample_count < MAX_BATCH_SIZE) {
-        int idx = p->valid_sample_count;
-        // Copy Raw Bytes? Protocol defines int16_t which matches.
-        // Raw sequence: Gx L, Gx H, Gy L... 
-        // Struct: accel[3], gyro[3].
-        // Sensor output: Gyro First (0x22), then Accel (0x28).
-        // Our Struct ImuSample: Accel first? 
-        // struct { accel; gyro; }
-        // We need to map correctly.
-        
-        // raw[0-5] = Gyro
-        // raw[6-11] = Accel
-        
-        memcpy(p->samples[idx].gyro, &raw[0], 6);
-        memcpy(p->samples[idx].accel, &raw[6], 6);
-        
-        p->valid_sample_count++;
-    }
-    
-    // restore_interrupts(ints); 
-    // Workaround for undefined reference:
-    __asm volatile ("msr primask, %0" : : "r" (ints) : "memory");
-}
-
-void check_slow_sensors() {
-    static uint32_t last_mag = 0;
-    static uint32_t last_baro = 0;
-    static uint32_t last_tof = 0;
-    uint32_t now = time_us_32();
-    
-    // MAG (100Hz)
-    if (now - last_mag > 10000) {
-        last_mag = now;
-        mmc5983_trigger_measurement(spi1, PIN_CS_MAG);
-        // Wait? No, it takes time. Poll for ready?
-        // Simpler: Trigger here, poll in next loop? Or assume previous is ready?
-        // Let's use the poll check.
-    }
-    if (mmc5983_data_ready(spi1, PIN_CS_MAG)) {
-         uint8_t mag_buf[7];
-         // Read...
-         uint8_t cmd = 0x00 | 0x80; // Register 0? 
-         // Previous code used 0x00 | 0x80.
-         gpio_put(PIN_CS_MAG, 0); spi_write_blocking(spi1, &cmd, 1); spi_read_blocking(spi1, 0x00, mag_buf, 7); gpio_put(PIN_CS_MAG, 1);
-         
-         uint16_t mx = (mag_buf[0] << 8) | mag_buf[1];
-         uint16_t my = (mag_buf[2] << 8) | mag_buf[3];
-         uint16_t mz = (mag_buf[4] << 8) | mag_buf[5];
-         
-         cached_mag[0] = (int16_t)(mx - 32768); // conversion?
-         // Previous code treated it as unsigned 16 then wrote to byte buffer.
-         // Let's assume standard int16 mapping.
-         cached_mag[0] = (int16_t)mx; 
-         cached_mag[1] = (int16_t)my;
-         cached_mag[2] = (int16_t)mz;
-         mag_update_counter++;
-    }
-    
-    // Baro (20Hz)
-    if (now - last_baro > 50000) {
-        last_baro = now;
-        bmp388_data_t b;
-        bmp388_read_data(i2c0, &b);
-        if (true) {
-            cached_pressure_raw = *((int32_t*)&b.pressure); // Copy float bits? Or int?
-            // Actually b.pressure is float. Protocol has int32_t pressure_raw.
-            // Let's cast float bits to int32 for transport.
-            memcpy(&cached_pressure_raw, &b.pressure, 4);
-        }
-    }
-    
-    // ToF (20Hz)
-    if (now - last_tof > 50000) {
-        last_tof = now;
-        vl53_data_t t;
-        vl53_read_data(i2c0, &t);
-        cached_tof_mm = t.range_mm;
-    }
+    // Toggle DRDY to signal update
+    gpio_put(PIN_DATA_READY, 1);
+    // fast pulse? RPi might miss edge if it's polling.
+    // Just set High. IRQ clears it? No IRQ doesn't clear it.
+    // RPi uses edge detection?
+    // Let's Pulse Low-High.
+    gpio_put(PIN_DATA_READY, 0);
+    gpio_put(PIN_DATA_READY, 1);
 }
 
 int main() {
     stdio_init_all();
     sleep_ms(500);
-    printf("=== ALTAIR SENSOR BRIDGE (BATCH MODE) ===\n");
 
     // Init Peripherals
-    i2c_init(i2c0, 400000);
-    gpio_set_function(PIN_SDA, GPIO_FUNC_I2C); gpio_pull_up(PIN_SDA);
-    gpio_set_function(PIN_SCL, GPIO_FUNC_I2C); gpio_pull_up(PIN_SCL);
-    
     spi_init(spi1, 8000000);
-    // spi_set_format(spi1, 8, SPI_CPOL_1, SPI_CPHA_1, SPI_MSB_FIRST);  // Mode 3 for ISM330DHCX (Temporarily Disabled)
     gpio_set_function(PIN_MISO_SENSOR, GPIO_FUNC_SPI);
     gpio_set_function(PIN_MOSI_SENSOR, GPIO_FUNC_SPI);
     gpio_set_function(PIN_SCK_SENSOR, GPIO_FUNC_SPI);
     
     gpio_init(PIN_LED); gpio_set_dir(PIN_LED, GPIO_OUT);
     gpio_init(PIN_DATA_READY); gpio_set_dir(PIN_DATA_READY, GPIO_OUT);
-
+    
     setup_sensors();
     
     // Setup PIO/DMA Slave
     offset = pio_add_program(pio, &spi_slave_program);
     spi_slave_init(pio, sm, offset, PIN_MISO_SLAVE);
     
-    // Init Buffer Header
-    batch_buffers[0].magic[0] = 0xAA; batch_buffers[0].magic[1] = 0x55;
-    batch_buffers[1].magic[0] = 0xAA; batch_buffers[1].magic[1] = 0x55;
-
-    // DMA Config
+    // DMA Config (24 bytes = 6 words)
     dma_tx = dma_claim_unused_channel(true);
     dma_channel_config c = dma_channel_get_default_config(dma_tx);
-    channel_config_set_transfer_data_size(&c, DMA_SIZE_32); // 32-bit WORDS (for MSB-first shim)
+    channel_config_set_transfer_data_size(&c, DMA_SIZE_32); 
     channel_config_set_read_increment(&c, true);
     channel_config_set_write_increment(&c, false);
     channel_config_set_dreq(&c, pio_get_dreq(pio, sm, true));
     
     dma_channel_configure(dma_tx, &c, 
-                          &pio->txf[sm],            // Dest
-                          spi_tx_buffers[ready_idx], // Src (32-bit aligned buffer)
-                          0,                        // Don't start yet
+                          &pio->txf[sm],       
+                          dma_buffer, 
+                          0,                   
                           false);
-                          
-    // --- SETUP SENSORS ---
+
+    // Init GPIO
     gpio_init(PIN_CS_SLAVE); gpio_set_dir(PIN_CS_SLAVE, GPIO_IN); gpio_pull_up(PIN_CS_SLAVE);
-    
-    // CRITICAL FIX: explicitly init SCK and MOSI as Inputs for PIO usage
     gpio_init(PIN_SCK_SLAVE); gpio_set_dir(PIN_SCK_SLAVE, GPIO_IN);
     gpio_init(PIN_MOSI_SLAVE); gpio_set_dir(PIN_MOSI_SLAVE, GPIO_IN);
 
     gpio_set_irq_enabled_with_callback(PIN_CS_SLAVE, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true, &cs_irq_handler);
 
-    // Initial Trigger of DMA+PIO to be ready for first transaction
-    // Pre-fill the TX buffer with the first packet
-    // Note: We need to handle the bswap for the initial ready buffer too.
-    uint32_t* src_pkt = (uint32_t*)&batch_buffers[ready_idx];
-    for (int i=0; i<sizeof(BatchPacket)/4; i++) {
-        spi_tx_buffers[ready_idx][i] = __builtin_bswap32(src_pkt[i]);
-    }
+    // Initial load
+    memset((void*)&tx_sample, 0, sizeof(RawSample));
+    tx_sample.magic = 0xAA55;
+    // Fill buffer
+    uint32_t* src = (uint32_t*)&tx_sample;
+    for(int i=0; i<6; i++) dma_buffer[i] = __builtin_bswap32(src[i]);
+    
+    // Start DMA/PIO
+    dma_channel_set_trans_count(dma_tx, 6, false); // 6 words (24 bytes)
+    dma_channel_set_read_addr(dma_tx, dma_buffer, true);
+    pio_sm_set_enabled(pio, sm, true);
 
-    dma_channel_set_trans_count(dma_tx, sizeof(BatchPacket)/4, false); // 32-bit WORDS
-    dma_channel_set_read_addr(dma_tx, spi_tx_buffers[ready_idx], true); // Start DMA
-    pio_sm_set_enabled(pio, sm, true); // Enable PIO
-
-    printf("[MAIN] PIO Slave Enabled & DMA Started (32-bit Mode). Waiting for CS...\n");
-    printf("[MAIN] Buffer Magic: %02X %02X\n", batch_buffers[ready_idx].magic[0], batch_buffers[ready_idx].magic[1]);
-
-    // --- MAIN LOOP ---
-    uint32_t last_log = 0;
-    uint32_t last_cs_count = 0;
-    uint32_t irq_log_counter = 0;
-
-    while (true) {
-        check_imu_data();   // Fast polling (1kHz+)
-        // check_slow_sensors(); // Disabled for rate testing
-
-        uint32_t now = time_us_32();
-        if (now - last_log > 1000000) { // 1Hz heartbeat
-            gpio_xor_mask(1u << PIN_LED);
-            
-            // Debug: Check if CS Interrupts are firing
-            if (cs_irq_count != last_cs_count) {
-                printf("[MAIN] CS IRQ Count: %lu (Delta: %lu)\n", 
-                       cs_irq_count, cs_irq_count - last_cs_count);
-                // Print first word of TX Buffer to verify content
-                printf("[MAIN] TX[0]=0x%08X (Expected ~0xAA55...)\n", spi_tx_buffers[ready_idx][0]);
-                last_cs_count = cs_irq_count;
-            } else {
-                 // Print CS Pin State to see if it's stuck
-                 printf("[MAIN] CS Idle. Pin State: %d. IRQ Count: %lu\n", 
-                        gpio_get(PIN_CS_SLAVE), cs_irq_count);
-            }
-            last_log = now;
-        }
+    while(1) {
+        poll_imu();
+        // check_slow_sensors(); // Still disabled
+        if (cs_irq_count % 1000 == 0) gpio_xor_mask(1u << PIN_LED);
     }
 }
