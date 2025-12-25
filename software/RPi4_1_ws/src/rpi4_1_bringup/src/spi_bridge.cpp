@@ -157,7 +157,7 @@ private:
          
          struct spi_ioc_transfer tr;
          memset(&tr, 0, sizeof(tr));
-         tr.tx_buf = (unsigned long)tx.data();
+         tr.tx_buf = 0; // Read Only
          tr.rx_buf = (unsigned long)rx.data();
          tr.len = rx.size();
          tr.speed_hz = 1000000; 
