@@ -245,7 +245,10 @@ private:
         if (offset < 0) {
             static int err_cnt = 0;
             if (err_cnt++ % 100 == 0) {
-                RCLCPP_WARN(this->get_logger(), "No Magic Found. Raw[0]: %02X", rx[0]);
+                // Dump first 16 bytes
+                char hex[49];
+                for(int k=0; k<16 && k<(int)rx.size(); k++) sprintf(&hex[k*3], "%02X ", rx[k]);
+                RCLCPP_WARN(this->get_logger(), "No Magic Found. Rx[0-15]: %s", hex);
             }
             return;
         }
