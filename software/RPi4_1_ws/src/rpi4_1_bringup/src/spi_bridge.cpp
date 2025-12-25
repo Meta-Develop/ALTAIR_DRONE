@@ -47,6 +47,8 @@ public:
             std::string s = std::to_string(pin);
             write(fd, s.c_str(), s.length());
             close(fd);
+        } else {
+            std::cerr << "GPIO Export Failed: " << pin << std::endl;
         }
         
         std::string path_dir = "/sys/class/gpio/gpio" + std::to_string(pin) + "/direction";
@@ -58,10 +60,13 @@ public:
             if (input) write(fd, "in", 2);
             else       write(fd, "out", 3);
             close(fd);
+        } else {
+            std::cerr << "GPIO Direction Failed: " << path_dir << std::endl;
         }
         
         std::string path_val = "/sys/class/gpio/gpio" + std::to_string(pin) + "/value";
         fd_ = open(path_val.c_str(), O_RDWR);
+        if (fd_ < 0) std::cerr << "GPIO Value Open Failed: " << path_val << std::endl;
     }
 
     ~SysfsGPIO() { if (fd_ >= 0) close(fd_); }
