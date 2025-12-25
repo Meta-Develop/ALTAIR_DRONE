@@ -38,6 +38,15 @@
 class GpiodLine {
 public:
     GpiodLine(int pin, bool input) : pin_(pin), chip_(nullptr), line_(nullptr) {
+        // First, unexport from sysfs if previously exported (cleanup)
+        int fd_un = open("/sys/class/gpio/unexport", O_WRONLY);
+        if (fd_un >= 0) {
+            std::string s = std::to_string(pin);
+            write(fd_un, s.c_str(), s.length()); // Ignore errors (not exported is OK)
+            close(fd_un);
+            usleep(10000); // Give kernel time to release
+        }
+        
         // Open GPIO chip (gpiochip0 for RPi4)
         chip_ = gpiod_chip_open("/dev/gpiochip0");
         if (!chip_) {
