@@ -165,7 +165,7 @@ private:
 
     void performRead(std::vector<uint8_t>& tx, std::vector<uint8_t>& rx) {
          gpio_cs_->setValue(0);
-         usleep(100); // Increased Setup time (Python parity)
+         usleep(500); // 500us - Give Pico DMA time to prepare after CS edge
          
          // Zero out TX buffer (Python sends [0]*128)
          std::fill(tx.begin(), tx.end(), 0);
