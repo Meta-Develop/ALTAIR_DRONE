@@ -22,11 +22,11 @@ _This will take ~5-10 minutes. Once done, the NMPC controller is ready._
 
 ### ✅ B. Firmware Deployment (Remote)
 
-**Method**: `verify_connections.sh` script handles flashing via OpenOCD.
+**Method**: USB BOOTSEL Flashing (Manual or via `picotool`).
 
-1. **Flash**: `~/ALTAIR_DRONE/software/scripts/verify_connections.sh`
-2. **Verify**: Green LEDs (5Hz / 2Hz).
-3. **Sensor Check**: Monitor `spi_bridge` output for IMU data.
+1. **Bootsel**: Put Pico into BOOTSEL mode (hold button while plugging in).
+2. **Flash**: Use `picotool load -x <file.uf2>` on the RPi4.
+3. **Verify**: Check `lsusb` and serial heartbeats (`/dev/ttyACM*`).
 
 ---
 
@@ -52,9 +52,9 @@ _This will take ~5-10 minutes. Once done, the NMPC controller is ready._
 
 #### Pending Agent Tasks (Next Steps)
 
-1. **Configure OpenOCD Multi-Drop**: Set up `openocd.cfg` to select between Pico 2 A/B via SWD Multidrop.
-2. **Verify NMPC Loop**: Test `/control/mode` switches and `/control/actuator_commands` output.
-3. **Implement Dynamixel Bridge**: Create ROS 2 node for U2D2 servo control.
+1. **Fix Wiring Swap**: Resolve the physical swap between Sensor (SPI0) and Actuator (SPI1) Picos.
+2. **Verify Sensor SPI**: [x] Confirm `0xAA55` magic bytes from Pico 2A (Sensors). (Fixed: 32-bit PIO ASM & DMA Pipeline)
+3. **Verify Actuator SPI**: Confirm `0xCAFE` magic bytes from Pico 2B (Actuators).
 4. **Tune PID/NMPC**: Adjust weights for 6kg mass during first flight tests.
 
 #### Missing Features

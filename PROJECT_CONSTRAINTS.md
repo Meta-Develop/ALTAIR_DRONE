@@ -30,7 +30,7 @@
 - **Platform**: Raspberry Pi 4 (Ubuntu 22.04 + ROS 2 Humble).
 - **Actuators**: 6x Rotors, 6x Dynamixel Servos (Tilt).
 - **Sensors**: Pico-based Hub (IMU, Baro, Mag) over SPI.
-- **Pico SPI**: **MUST use Hardware SPI Slave** (not SoftSPI). DMA required for 1kHz+ throughput.
+- **Pico SPI**: **MUST use PIO SPI Slave** (Hardware peripheral is unreliable for Slave CS). DMA + 32-bit PIO ASM loop required for sync.
 
 ## 3. Software Architecture
 
@@ -48,7 +48,6 @@
 ## 5. Remote Access
 
 - **RPi4_1 SSH**: `ssh konn@<tailscale IP>` (e.g., `ssh konn@100.x.x.x`)
-- **Debug Probe**: Connected to RPi4_1, flashes both Pico2A and Pico2B via SWD
 
 ## 6. Git Workflow
 
@@ -57,7 +56,10 @@
 - **Temporary/Test Files**: OK to push to feature branches, but **NEVER merge** these to `main`.
 - **Merge Criteria**: Only merge a branch to `main` when **all tasks for that branch are fully completed** and verified.
 - **No Fast-Forward**: Fast-forward merges are **strictly NOT allowed**. Always use `git merge --no-ff` to preserve branch history.
-- **No Agent Context Files**: Agent context documents (e.g., `PROJECT_TASKS.md`, `.agent/` files, markdown files for inter-agent communication) **MUST NOT be pushed** to git. Add them to `.gitignore`.
+- **Agent Context & Handover**:
+  - **Knowledge Preservation**: Agents **MUST** update `HANDOVER_CONTEXT.md` (or relevant docs) with new findings, fixes, or architectural decisions before ending a session.
+  - **Goal**: Ensure future agents (in different sessions) have access to the latest state and "tribal knowledge" to avoid re-discovering resolved issues.
+  - **No Agent Context Files**: Agent context documents (e.g., `PROJECT_TASKS.md`, `.agent/` files, markdown files for inter-agent communication) **MUST NOT be pushed** to git. Add them to `.gitignore`.
 - **Temporary & Test Files**:
   - **Marking**: Agents must clearly mark test files (e.g., `test_*.c`, `temp_Folder/`).
   - **Git Rule**: Temp files can be pushed to feature branches but **NEVER merged to `main`**.

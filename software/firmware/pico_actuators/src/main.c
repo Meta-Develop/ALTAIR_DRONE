@@ -76,52 +76,49 @@ void cs_irq_handler(uint gpio, uint32_t events) {
 
     if (events & GPIO_IRQ_EDGE_FALL) {
         // --- Transaction START ---
-        // 1. Reset PIO/DMA
-        pio_sm_set_enabled(pio_slave, sm_slave, false);
-        pio_sm_clear_fifos(pio_slave, sm_slave);
-        pio_sm_restart(pio_slave, sm_slave);
-        pio_sm_exec(pio_slave, sm_slave, pio_encode_jmp(offset_slave));
-        
-        // 2. Restart DMA Channels
-        dma_channel_abort(dma_tx);
-        dma_channel_abort(dma_rx);
-        
-        // RX: Read from PIO RX FIFO to rx_buffer
-        dma_channel_transfer_to_buffer_now(dma_rx, rx_buffer, sizeof(rx_buffer));
-        
-        // TX: Write tx_pkt to PIO TX FIFO
-        // Note: tx_pkt should be ready.
-        // Update Checksum just in case
-        // (Checksum calculation omitted for speed, assume logic does it)
-        dma_channel_transfer_from_buffer_now(dma_tx, &tx_pkt, sizeof(TelemetryPacket));
-        
-        // 3. Enable PIO
-        pio_sm_set_enabled(pio_slave, sm_slave, true);
-        
-        gpio_put(25, 1); // LED ON at Start
+        // Do NOT reset PIO/DMA. It is already armed and waiting.
+        gpio_put(25, 1); // LED ON
     }
     else if (events & GPIO_IRQ_EDGE_RISE) {
         // --- Transaction END ---
-        gpio_put(25, 0); // LED OFF at End
+        gpio_put(25, 0); // LED OFF
 
-        // Check if we received enough data?
-        // Copy rx_buffer to rx_pkt if valid magic
+        // 1. Process Received Data (RX)
+        // Check if we received valid data
         if (rx_buffer[0] == 0xBA && rx_buffer[1] == 0xBE) {
             memcpy((void*)&rx_pkt, rx_buffer, sizeof(ActuatorPacket));
-            printf("SPI RX: OK (Throttle1=%d)\n", rx_pkt.throttle[0]);
-        } else {
-             printf("SPI RX: BAD MAGIC %02X %02X\n", rx_buffer[0], rx_buffer[1]);
-        }
+            // printf("SPI RX: OK (Throttle1=%d)\n", rx_pkt.throttle[0]); // Minimize print in IRQ
+        } 
         
-        // Prepare TX packet for NEXT time?
-        // tx_pkt matches Global state (Motors).
-        // Update header/checksum
+        // 2. Prepare NEXT Response (TX)
         tx_pkt.magic[0] = 0xCA; tx_pkt.magic[1] = 0xFE;
-        // Checksum calculation
+        // Checksum
         uint8_t sum = 0;
         uint8_t* b = (uint8_t*)&tx_pkt;
         for(int i=0; i<sizeof(TelemetryPacket)-1; i++) sum ^= b[i];
         tx_pkt.checksum = sum;
+        
+        // 3. Restart DMA for NEXT Transaction (Pipeline)
+        // Abort current (completed) transfers to be safe
+        dma_channel_abort(dma_tx);
+        dma_channel_abort(dma_rx);
+        
+        // Clearing FIFOs is tricky:
+        // If we clear FIFOs, we might lose data if CS toggles fast?
+        // But if we don't, we might interpret 1 extra bit as start of next.
+        // Safe to clear FIFOs while CS is High.
+        pio_sm_clear_fifos(pio_slave, sm_slave);
+        pio_sm_restart(pio_slave, sm_slave); // Reset SM to entry point?
+        pio_sm_exec(pio_slave, sm_slave, pio_encode_jmp(offset_slave));
+        
+        // Re-Arm RX
+        dma_channel_transfer_to_buffer_now(dma_rx, rx_buffer, sizeof(rx_buffer));
+        
+        // Re-Arm TX
+        dma_channel_transfer_from_buffer_now(dma_tx, &tx_pkt, sizeof(TelemetryPacket));
+        
+        // Ensure PIO is enabled (it should be)
+        pio_sm_set_enabled(pio_slave, sm_slave, true);
     }
 }
 
@@ -129,7 +126,6 @@ int main() {
     stdio_init_all();
     
     // Init DShot (GP0-GP5)
-    // dshot_init() claims PIO0(0-3) and PIO1(0-1).
     dshot_init(); 
     
     // Init SPI Slave (PIO1 SM2)
@@ -153,6 +149,14 @@ int main() {
     channel_config_set_write_increment(&c_rx, true);
     channel_config_set_dreq(&c_rx, pio_get_dreq(pio_slave, sm_slave, false)); // RX DREQ
     dma_channel_configure(dma_rx, &c_rx, rx_buffer, &pio_slave->rxf[sm_slave], 0, false);
+    
+    // Initial Packet Setup
+    tx_pkt.magic[0] = 0xCA; tx_pkt.magic[1] = 0xFE;
+    
+    // Start DMA/PIO for the VERY FIRST transaction
+    dma_channel_transfer_to_buffer_now(dma_rx, rx_buffer, sizeof(rx_buffer));
+    dma_channel_transfer_from_buffer_now(dma_tx, &tx_pkt, sizeof(TelemetryPacket));
+    pio_sm_set_enabled(pio_slave, sm_slave, true);
     
     // IRQ Setup
     gpio_init(PIN_CS); gpio_set_dir(PIN_CS, GPIO_IN); gpio_pull_up(PIN_CS);

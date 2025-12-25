@@ -1,22 +1,15 @@
 import spidev
 import time
-import RPi.GPIO as GPIO
 
 # SPI Config
 BUS = 1
-DEVICE = 0 # Use spidev1.0 (HW Bus) but ignore its CS (GPIO 18)
-CS_PIN = 16 # GPIO 16 (Pin 36) - Actuator CS
-
-# Setup Manual CS
-GPIO.setmode(GPIO.BCM)
-GPIO.setup(CS_PIN, GPIO.OUT)
-GPIO.output(CS_PIN, GPIO.HIGH) # Idle High
+DEVICE = 2 # Matches /dev/spidev1.2 (CE2 = GPIO 16)
 
 spi = spidev.SpiDev()
 spi.open(BUS, DEVICE)
 spi.max_speed_hz = 100000 
 spi.mode = 0
-spi.no_cs = True # Disable HW CS
+spi.no_cs = False # ✅ ENABLE HARDWARE CS (Let Kernel toggle GPIO 16)
 
 def calculate_checksum(data):
     xor = 0
@@ -25,19 +18,17 @@ def calculate_checksum(data):
     return xor
 
 def test():
-    print(f"Testing Pico (SPI1) Manual CS={CS_PIN}...")
+    print(f"Testing Pico (SPI1.{DEVICE}) HW CS...")
     
     cmd = bytearray(16)
     cmd[0] = 0xBA
     cmd[1] = 0xBE
     cmd[15] = calculate_checksum(cmd[:15])
     
-    tx_buf = list(cmd + bytearray(30))
+    # 128 bytes total
+    tx_buf = list(cmd + bytearray(112))
     
-    # Transaction
-    GPIO.output(CS_PIN, GPIO.LOW)
     rx_buf = spi.xfer2(tx_buf)
-    GPIO.output(CS_PIN, GPIO.HIGH)
     
     bytes_rx = bytearray(rx_buf)
     
@@ -56,4 +47,3 @@ if __name__ == "__main__":
             time.sleep(0.5)
     except KeyboardInterrupt:
         spi.close()
-        GPIO.cleanup()
