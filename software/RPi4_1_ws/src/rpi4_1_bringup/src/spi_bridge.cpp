@@ -32,72 +32,71 @@
 #define MMC5983_SENS_UT (0.0244f)
 #define MMC5983_SENS_TESLA (MMC5983_SENS_UT / 1000000.0f) 
 
-// Modern GPIO using libgpiod (replaces deprecated sysfs)
-#include <gpiod.h>
-
-class GpiodLine {
+// Sysfs GPIO (Replaces libgpiod for consistency with Actuator Node)
+class SysfsGPIO {
 public:
-    GpiodLine(int pin, bool input) : pin_(pin), chip_(nullptr), line_(nullptr) {
-        // First, unexport from sysfs if previously exported (cleanup)
-        int fd_un = open("/sys/class/gpio/unexport", O_WRONLY);
-        if (fd_un >= 0) {
+    SysfsGPIO(int pin, bool input) : pin_(pin) {
+        // Export
+        int fd = open("/sys/class/gpio/export", O_WRONLY);
+        if (fd >= 0) {
             std::string s = std::to_string(pin);
-            write(fd_un, s.c_str(), s.length()); // Ignore errors (not exported is OK)
-            close(fd_un);
-            usleep(10000); // Give kernel time to release
+            write(fd, s.c_str(), s.length());
+            close(fd);
         }
-        
-        // Open GPIO chip (gpiochip0 for RPi4)
-        chip_ = gpiod_chip_open("/dev/gpiochip0");
-        if (!chip_) {
-            std::cerr << "GPIOD: Failed to open chip" << std::endl;
-            return;
-        }
-        
-        // Get line
-        line_ = gpiod_chip_get_line(chip_, pin);
-        if (!line_) {
-            std::cerr << "GPIOD: Failed to get line " << pin << std::endl;
-            return;
-        }
-        
-        // Request line as output (for CS) or input
-        int ret;
-        if (input) {
-            ret = gpiod_line_request_input(line_, "spi_bridge");
+        usleep(100000); // Wait for udev to create permissions
+
+        // Direction
+        std::string dir_path = "/sys/class/gpio/gpio" + std::to_string(pin) + "/direction";
+        fd = open(dir_path.c_str(), O_WRONLY);
+        if (fd >= 0) {
+            if (input) write(fd, "in", 2);
+            else       write(fd, "out", 3);
+            close(fd);
         } else {
-            ret = gpiod_line_request_output(line_, "spi_bridge", 1); // Start HIGH (CS inactive)
+             std::cerr << "SysfsGPIO: Failed to set direction for " << pin << std::endl;
         }
         
-        if (ret < 0) {
-            std::cerr << "GPIOD: Failed to request line " << pin << std::endl;
+        // Open Value FD
+        std::string val_path = "/sys/class/gpio/gpio" + std::to_string(pin) + "/value";
+        val_fd_ = open(val_path.c_str(), input ? O_RDONLY : O_RDWR);
+        if (val_fd_ < 0) std::cerr << "SysfsGPIO: Failed to open value for " << pin << std::endl;
+        
+        if (!input) setValue(1); // Default HIGH (Inactive CS)
+    }
+
+    ~SysfsGPIO() {
+        if (val_fd_ >= 0) close(val_fd_);
+        // Optional: Unexport (Don't unexport to keep permissions for next run?)
+        // Let's Unexport to be clean.
+        int fd = open("/sys/class/gpio/unexport", O_WRONLY);
+        if (fd >= 0) {
+            std::string s = std::to_string(pin_);
+            write(fd, s.c_str(), s.length());
+            close(fd);
         }
     }
-    
-    ~GpiodLine() {
-        if (line_) gpiod_line_release(line_);
-        if (chip_) gpiod_chip_close(chip_);
-    }
-    
+
     void setValue(int val) {
-        if (line_) {
-            gpiod_line_set_value(line_, val);
+        if (val_fd_ >= 0) {
+            char c = val ? '1' : '0';
+            write(val_fd_, &c, 1);
         }
     }
-    
+
     int getValue() {
-        if (line_) {
-            return gpiod_line_get_value(line_);
+        if (val_fd_ >= 0) {
+            char c;
+            lseek(val_fd_, 0, SEEK_SET);
+            if (read(val_fd_, &c, 1) > 0) {
+                return (c == '1') ? 1 : 0;
+            }
         }
-        return -1;
+        return 0;
     }
-    
-    void clear() { /* No-op for gpiod */ }
 
 private:
     int pin_;
-    struct gpiod_chip* chip_;
-    struct gpiod_line* line_;
+    int val_fd_ = -1;
 };
 
 class SpiBridgeNode : public rclcpp::Node {
@@ -118,16 +117,16 @@ public:
         // Initialize Notch Filters (3 Axis)
         filters_.init3Axis();
 
-        // Hardware Init using libgpiod
-        gpio_ready_ = std::make_unique<GpiodLine>(24, true);  // Pin 18 (GPIO 24) - Data Ready input
-        gpio_cs_ = std::make_unique<GpiodLine>(25, false);    // Pin 22 (GPIO 25) - CS output
+        // Hardware Init using SysfsGPIO (Matches Actuator Node)
+        gpio_ready_ = std::make_unique<SysfsGPIO>(24, true);  // Pin 18 (GPIO 24) - Data Ready input
+        gpio_cs_ = std::make_unique<SysfsGPIO>(25, false);    // Pin 22 (GPIO 25) - CS output
         gpio_cs_->setValue(1); // CS inactive (HIGH)
         
         spi_fd_ = open("/dev/spidev0.0", O_RDWR);
         if (spi_fd_ < 0) RCLCPP_ERROR(this->get_logger(), "SPI Open Failed");
         
         uint32_t speed = 1000000;
-        uint8_t mode = SPI_MODE_3 | SPI_NO_CS;
+        uint8_t mode = SPI_MODE_0 | SPI_NO_CS;
         uint8_t bits = 8;
         ioctl(spi_fd_, SPI_IOC_WR_MODE, &mode);
         ioctl(spi_fd_, SPI_IOC_WR_BITS_PER_WORD, &bits);
@@ -164,7 +163,6 @@ private:
         std::vector<uint8_t> tx(sizeof(BatchPacket), 0);
         
         while (running_ && rclcpp::ok()) {
-/*
              // Wait for Data Ready signal from Pico (GPIO 24 HIGH)
              int timeout_us = 5000; // 5ms max wait (should trigger at 1kHz = 1ms)
              while (gpio_ready_->getValue() == 0 && timeout_us > 0) {
@@ -180,11 +178,7 @@ private:
                  }
                  continue;
              }
-*/
-             // Blind Poll (Mimic verify_sensor_values.py)
-             // Python sleeps 1ms between reads.
-             usleep(1000); 
-
+             
              // Pico is ready - perform SPI read
              performRead(tx, rx);
         }
@@ -394,8 +388,8 @@ private:
         tof_pub_->publish(tof_msg);
     }
 
-    std::unique_ptr<GpiodLine> gpio_ready_;
-    std::unique_ptr<GpiodLine> gpio_cs_;
+    std::unique_ptr<SysfsGPIO> gpio_ready_;
+    std::unique_ptr<SysfsGPIO> gpio_cs_;
     int spi_fd_ = -1;
     std::thread poll_thread_;
     std::atomic<bool> running_;
