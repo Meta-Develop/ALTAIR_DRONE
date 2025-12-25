@@ -76,7 +76,7 @@ void cs_irq_handler(uint gpio, uint32_t events) {
 
     if (events & GPIO_IRQ_EDGE_FALL) {
         // --- Transaction START ---
-        // Do NOT reset PIO/DMA. It is already armed and waiting.
+        // Do NOT reset PIO/DMA. It is already armed and waiting from the previous RISE.
         gpio_put(25, 1); // LED ON
     }
     else if (events & GPIO_IRQ_EDGE_RISE) {
@@ -84,27 +84,48 @@ void cs_irq_handler(uint gpio, uint32_t events) {
         gpio_put(25, 0); // LED OFF
 
         // 1. Process Received Data (RX)
-        // Check if we received valid data
+        // Correct alignment is guaranteed if Pipeline is working.
         if (rx_buffer[0] == 0xBA && rx_buffer[1] == 0xBE) {
-            memcpy((void*)&rx_pkt, rx_buffer, sizeof(ActuatorPacket));
-            // printf("SPI RX: OK (Throttle1=%d)\n", rx_pkt.throttle[0]); // Minimize print in IRQ
+            ActuatorPacket* pkt = (ActuatorPacket*)rx_buffer;
+            
+            // Checksum verification (Optional but catching errors is good)
+            uint8_t sum = 0;
+            for(int i=0; i<sizeof(ActuatorPacket)-1; i++) sum ^= rx_buffer[i];
+            
+            if (sum == pkt->checksum) {
+                // printf("RX OK: Thr[0]=%d Status=%d\n", pkt->throttle[0], pkt->flags);
+                
+                // Update Motors (DShot)
+                // Pass throttle array to DShot driver
+                // dshot_write(pkt->throttle); 
+                // Using dshot_update_all(pkt->throttle);
+                
+                // For now, minimal logic:
+                if (pkt->flags & 1) { // Arm
+                     // dshot_arm();
+                }
+            } else {
+                 // printf("RX Cksum Fail\n");
+            }
         } 
         
         // 2. Prepare NEXT Response (TX)
+        // Populate tx_pkt with LATEST telemetry
         tx_pkt.magic[0] = 0xCA; tx_pkt.magic[1] = 0xFE;
-        // Checksum
+        // Populate Dummy or Real Telemetry here
+        // tx_pkt.voltage[...] = ...;
+        
+        // Calculate Checksum
         uint8_t sum = 0;
         uint8_t* b = (uint8_t*)&tx_pkt;
         for(int i=0; i<sizeof(TelemetryPacket)-1; i++) sum ^= b[i];
         tx_pkt.checksum = sum;
         
         // 3. Restart DMA for NEXT Transaction (Pipeline)
-        // Abort current (completed) transfers to be safe
+        // Abort current (should be done)
         dma_channel_abort(dma_tx);
         dma_channel_abort(dma_rx);
         
-        // Clearing FIFOs is tricky:
-        // If we clear FIFOs, we might lose data if CS toggles fast?
         // But if we don't, we might interpret 1 extra bit as start of next.
         // Safe to clear FIFOs while CS is High.
         pio_sm_clear_fifos(pio_slave, sm_slave);
@@ -149,6 +170,14 @@ int main() {
     channel_config_set_write_increment(&c_rx, true);
     channel_config_set_dreq(&c_rx, pio_get_dreq(pio_slave, sm_slave, false)); // RX DREQ
     dma_channel_configure(dma_rx, &c_rx, rx_buffer, &pio_slave->rxf[sm_slave], 0, false);
+    
+    // Initial Packet Setup
+    tx_pkt.magic[0] = 0xCA; tx_pkt.magic[1] = 0xFE;
+    
+    // Start DMA/PIO for the VERY FIRST transaction
+    dma_channel_transfer_to_buffer_now(dma_rx, rx_buffer, sizeof(rx_buffer));
+    dma_channel_transfer_from_buffer_now(dma_tx, &tx_pkt, sizeof(TelemetryPacket));
+    pio_sm_set_enabled(pio_slave, sm_slave, true);
     
     // Initial Packet Setup
     tx_pkt.magic[0] = 0xCA; tx_pkt.magic[1] = 0xFE;

@@ -155,11 +155,17 @@ private:
          gpio_cs_->setValue(0);
          usleep(10); // Setup time for Pico
          
+         // Zero out TX buffer (Python sends [0]*128)
+         std::fill(tx.begin(), tx.end(), 0);
+
          struct spi_ioc_transfer tr;
          memset(&tr, 0, sizeof(tr));
-         tr.tx_buf = 0; // Read Only
+         tr.tx_buf = (unsigned long)tx.data(); 
          tr.rx_buf = (unsigned long)rx.data();
          tr.len = rx.size();
+         // Python uses xfer2 which keeps CS low? No, manual CS.
+         // This ioctl is the xfer.
+         
          tr.speed_hz = 1000000; 
          tr.bits_per_word = 8;
          
