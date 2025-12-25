@@ -106,7 +106,7 @@ public:
         if (spi_fd_ < 0) RCLCPP_ERROR(this->get_logger(), "SPI Open Failed");
         
         uint32_t speed = 1000000;
-        uint8_t mode = 0;
+        uint8_t mode = SPI_MODE_0 | SPI_NO_CS;
         uint8_t bits = 8;
         ioctl(spi_fd_, SPI_IOC_WR_MODE, &mode);
         ioctl(spi_fd_, SPI_IOC_WR_BITS_PER_WORD, &bits);
