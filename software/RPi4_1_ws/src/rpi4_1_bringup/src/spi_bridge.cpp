@@ -153,7 +153,7 @@ private:
 
     void performRead(std::vector<uint8_t>& tx, std::vector<uint8_t>& rx) {
          gpio_cs_->setValue(0);
-         // usleep(5); // Tiny delay for setup
+         usleep(10); // Setup time for Pico
          
          struct spi_ioc_transfer tr;
          memset(&tr, 0, sizeof(tr));
