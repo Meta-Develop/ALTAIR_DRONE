@@ -163,20 +163,25 @@ private:
         std::vector<uint8_t> rx(sizeof(BatchPacket)); 
         std::vector<uint8_t> tx(sizeof(BatchPacket), 0);
         
-        struct timespec next_time;
-        clock_gettime(CLOCK_MONOTONIC, &next_time);
-        const long PERIOD_NS = 1000000; // 1ms = 1kHz batch rate
-        
         while (running_ && rclcpp::ok()) {
-             performRead(tx, rx);
-             
-             // Precise 1kHz timing using clock_nanosleep
-             next_time.tv_nsec += PERIOD_NS;
-             if (next_time.tv_nsec >= 1000000000L) {
-                 next_time.tv_nsec -= 1000000000L;
-                 next_time.tv_sec++;
+             // Wait for Data Ready signal from Pico (GPIO 24 HIGH)
+             int timeout_us = 5000; // 5ms max wait (should trigger at 1kHz = 1ms)
+             while (gpio_ready_->getValue() == 0 && timeout_us > 0) {
+                 usleep(10); // 10us polling
+                 timeout_us -= 10;
              }
-             clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_time, NULL);
+             
+             if (timeout_us <= 0) {
+                 // Pico not ready - skip this cycle
+                 static int timeout_cnt = 0;
+                 if (timeout_cnt++ % 1000 == 0) {
+                     RCLCPP_WARN(this->get_logger(), "Data Ready timeout (%d)", timeout_cnt);
+                 }
+                 continue;
+             }
+             
+             // Pico is ready - perform SPI read
+             performRead(tx, rx);
         }
     }
 
