@@ -163,18 +163,26 @@ private:
         std::vector<uint8_t> rx(sizeof(BatchPacket)); 
         std::vector<uint8_t> tx(sizeof(BatchPacket), 0);
         
+        struct timespec next_time;
+        clock_gettime(CLOCK_MONOTONIC, &next_time);
+        const long PERIOD_NS = 1000000; // 1ms = 1kHz batch rate
+        
         while (running_ && rclcpp::ok()) {
-             // Blind Poll at 1kHz. 
-             // Ideally use clock_nanosleep for precision.
-             // For now usleep(500) + Transaction ~150us + Processing -> ~1kHz
-             usleep(500); 
              performRead(tx, rx);
+             
+             // Precise 1kHz timing using clock_nanosleep
+             next_time.tv_nsec += PERIOD_NS;
+             if (next_time.tv_nsec >= 1000000000L) {
+                 next_time.tv_nsec -= 1000000000L;
+                 next_time.tv_sec++;
+             }
+             clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_time, NULL);
         }
     }
 
     void performRead(std::vector<uint8_t>& tx, std::vector<uint8_t>& rx) {
          gpio_cs_->setValue(0);
-         usleep(500); // 500us - Give Pico DMA time to prepare after CS edge
+         usleep(20); // 20us - Minimal CS setup time (Pico DMA is pipelined)
          
          // Zero out TX buffer (Python sends [0]*128)
          std::fill(tx.begin(), tx.end(), 0);
@@ -187,7 +195,7 @@ private:
          // Python uses xfer2 which keeps CS low? No, manual CS.
          // This ioctl is the xfer.
          
-         tr.speed_hz = 1000000; 
+         tr.speed_hz = 8000000; // 8MHz for fast transfer (128 bytes = 128us)
          tr.bits_per_word = 8;
          
          int ret = ioctl(spi_fd_, SPI_IOC_MESSAGE(1), &tr);
