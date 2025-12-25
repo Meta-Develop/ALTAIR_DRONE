@@ -32,7 +32,7 @@ class SpiBridgeNode(Node):
         # SPI Setup
         self.spi = spidev.SpiDev()
         self.spi.open(SPI_BUS, SPI_DEVICE)
-        self.spi.max_speed_hz = SPI_SPEED_HZ_SAFE
+        self.spi.max_speed_hz = SPI_SPEED_HZ # 4MHz
         self.spi.mode = 0
         self.spi.no_cs = True
         
@@ -56,70 +56,27 @@ class SpiBridgeNode(Node):
         tx_buf = [0] * 128
         fmt_samples = '<' + 'h' * 48 # 8 samples * 6 axes * 2 bytes = 96 bytes
 
+        # Stats
+        last_print = time.time()
+        count = 0
+        
         while rclpy.ok() and self.run_thread:
-            # OPTIMIZED HANDSHAKE: Wait for Rising Edge
-            # Timeout 2ms (should be ready in ~1.2ms)
+            # OPTIMIZED HANDSHAKE
             if GPIO.wait_for_edge(GPIO_DRDY, GPIO.RISING, timeout=5) is None:
-                # Timeout
-                if GPIO.input(GPIO_DRDY): 
-                     # Already High (we missed edge or stuck high), proceed
-                     pass
-                else:
-                     continue
+                if GPIO.input(GPIO_DRDY): pass
+                else: continue
 
-            # Transfer
             GPIO.output(GPIO_CS, 0)
             rx = self.spi.xfer2(tx_buf)
             GPIO.output(GPIO_CS, 1)
 
-            # Fast Process
-            # Magic Scan (Hardcoded common offsets for speed?)
-            # Usually offset 0 or 2.
-            # Check 0
-            offset = -1
-            swapped = False
+            # Skip Magic Scan & Unpacking for Speed Test
+            # Just publish immediately to verify throughput
             
-            # Optimization: Direct access
-            if rx[0] == 0xAA and rx[1] == 0x55:
-                offset = 0
-            elif rx[2] == 0xAA and rx[3] == 0x55:
-                # Common case based on verify script
-                offset = 2
-            elif rx[0] == 0x55 and rx[1] == 0xAA:
-                offset = 0; swapped = True
-            elif rx[2] == 0x55 and rx[3] == 0xAA:
-                offset = 2; swapped = True
-            else:
-                # Full scan fallback (slow)
-                # Skip for speed? or scan minimal?
-                continue
-            
-            # Construct Message
+            # Construct Message (Dummy)
             msg = ImuBatch()
             msg.header.stamp = self.get_clock().now().to_msg()
             msg.header.frame_id = "pico_imu"
-            
-            try:
-                # Unpack Timestamp (Offset + 4)
-                msg.timestamp_us = struct.unpack_from('<Q', bytearray(rx), offset+4)[0]
-                
-                # Unpack Samples (Offset + 13)
-                # But we need to handle SWAP if needed.
-                # If swapped, we can't easily use struct.unpack default.
-                # We assume correct order for speed test.
-                # If swapped, ignore for now (rate test).
-                # Or simplistic swap:
-                # msg.valid_sample_count = rx[offset+12]
-                
-                # We need data to be valid for Notch Filter!
-                # If data is invalid, Notch Filter crashes?
-                # So we must parse correctly.
-                # ...
-                # Let's publish mostly raw headers for rate test.
-                pass
-            except:
-                pass
-            
             self.pub_batch.publish(msg)
 
     def destroy_node(self):
