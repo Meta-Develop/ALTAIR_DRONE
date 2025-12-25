@@ -23,7 +23,15 @@ ament_target_dependencies(actuator_bridge_node
   dynamixel_sdk
 )
 
-install(TARGETS actuator_bridge_node
+add_executable(actuator_spi_node src/actuator_spi_node.cpp)
+target_compile_features(actuator_spi_node PUBLIC cxx_std_17)
+ament_target_dependencies(actuator_spi_node
+  rclcpp
+  std_msgs
+  sensor_msgs
+)
+
+install(TARGETS actuator_bridge_node actuator_spi_node
   DESTINATION lib/${PROJECT_NAME})
 
 ament_package()

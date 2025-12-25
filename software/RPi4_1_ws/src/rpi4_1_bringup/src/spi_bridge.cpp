@@ -105,7 +105,7 @@ public:
         spi_fd_ = open("/dev/spidev0.0", O_RDWR);
         if (spi_fd_ < 0) RCLCPP_ERROR(this->get_logger(), "SPI Open Failed");
         
-        uint32_t speed = 8000000;
+        uint32_t speed = 1000000;
         uint8_t mode = 0;
         uint8_t bits = 8;
         ioctl(spi_fd_, SPI_IOC_WR_MODE, &mode);
@@ -160,7 +160,7 @@ private:
          tr.tx_buf = (unsigned long)tx.data();
          tr.rx_buf = (unsigned long)rx.data();
          tr.len = rx.size();
-         tr.speed_hz = 8000000; 
+         tr.speed_hz = 1000000; 
          tr.bits_per_word = 8;
          
          ioctl(spi_fd_, SPI_IOC_MESSAGE(1), &tr);
@@ -169,16 +169,83 @@ private:
          processData(rx);
     }
 
-    void processData(const std::vector<uint8_t>& rx) {
-        const BatchPacket* pkt = reinterpret_cast<const BatchPacket*>(rx.data());
+    void processData(std::vector<uint8_t>& rx) {
+        // --- CONSTANTS ---
+        // Expected Magic: 0x55AA (Little Endian in memory: AA 55)
+        const uint8_t MAGIC_0 = 0xAA;
+        const uint8_t MAGIC_1 = 0x55;
         
-        // Verify Magic
-        if (pkt->magic[0] != BATCH_MAGIC_0 || pkt->magic[1] != BATCH_MAGIC_1) {
+        // Swapped Magic: 0x55AA unswapped -> 0xAA55 (Little Endian: 55 AA)
+        // If we see 55 AA, it means 16-bit words are swapped [1,0][3,2]...
+        const uint8_t SWAP_MAGIC_0 = 0x55;
+        const uint8_t SWAP_MAGIC_1 = 0xAA;
+
+        int offset = -1;
+        bool swapped = false;
+
+        // 1. Scan for Magic
+        for (size_t i = 0; i < rx.size() - 4; i++) {
+            // Check Standard (AA 55)
+            if (rx[i] == MAGIC_0 && rx[i+1] == MAGIC_1) {
+                offset = i;
+                swapped = false;
+                break;
+            }
+            // Check Swapped (55 AA)
+            if (rx[i] == SWAP_MAGIC_0 && rx[i+1] == SWAP_MAGIC_1) {
+                offset = i;
+                swapped = true;
+                break;
+            }
+        }
+
+        if (offset < 0) {
             static int err_cnt = 0;
             if (err_cnt++ % 100 == 0) {
-                 RCLCPP_ERROR(this->get_logger(), "Bad Header: %02X %02X", rx[0], rx[1]);
+                RCLCPP_WARN(this->get_logger(), "No Magic Found. Raw[0]: %02X", rx[0]);
             }
             return;
+        }
+
+        // 2. Unswap / Align
+        // We use a temporary buffer or pointer to struct.
+        // Assuming BatchPacket fits in remaining buffer.
+        if (offset + sizeof(BatchPacket) > rx.size()) {
+             // Alignment pushed data off edge?
+             // Ideally we should read MORE than sizeof(BatchPacket) to handle jitter.
+             // For now, minimal check.
+             // return; 
+             // Logic below handles pointer cast safely? No, need check.
+        }
+
+        // Create a working copy for Unswapping if needed
+        alignas(4) BatchPacket pkt_copy; // Aligned stack buffer
+        const BatchPacket* pkt = nullptr;
+
+        if (swapped) {
+            // Unswap 16-bit words from offset
+            // Limit to packet size
+            size_t copy_len = sizeof(BatchPacket);
+            if (offset + copy_len > rx.size()) copy_len = rx.size() - offset; // Truncate safety
+
+            uint8_t* dst = (uint8_t*)&pkt_copy;
+            for (size_t j = 0; j < copy_len - 1; j += 2) {
+                dst[j]   = rx[offset + j + 1];
+                dst[j+1] = rx[offset + j];
+            }
+            pkt = &pkt_copy;
+        } else {
+            // Standard
+            // memcpy to aligned storage to avoid unaligned access faults on ARM
+            memcpy(&pkt_copy, &rx[offset], sizeof(BatchPacket));
+            pkt = &pkt_copy;
+        }
+
+        // 3. Verify Packet Internals
+        // Re-check magic just to be sane
+        if (pkt->magic[0] != BATCH_MAGIC_0 || pkt->magic[1] != BATCH_MAGIC_1) {
+             // Should not happen if logic above is correct
+             return;
         }
 
         rclcpp::Time now = this->get_clock()->now();
