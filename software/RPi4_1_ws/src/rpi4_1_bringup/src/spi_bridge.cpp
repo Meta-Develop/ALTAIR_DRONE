@@ -8,6 +8,7 @@
 
 #include <vector>
 #include <cstring>
+#include <cerrno>
 #include <iostream>
 #include <fcntl.h>
 #include <unistd.h>
@@ -158,7 +159,7 @@ private:
 
     void performRead(std::vector<uint8_t>& tx, std::vector<uint8_t>& rx) {
          gpio_cs_->setValue(0);
-         usleep(10); // Setup time for Pico
+         usleep(100); // Increased Setup time (Python parity)
          
          // Zero out TX buffer (Python sends [0]*128)
          std::fill(tx.begin(), tx.end(), 0);
@@ -174,7 +175,10 @@ private:
          tr.speed_hz = 1000000; 
          tr.bits_per_word = 8;
          
-         ioctl(spi_fd_, SPI_IOC_MESSAGE(1), &tr);
+         int ret = ioctl(spi_fd_, SPI_IOC_MESSAGE(1), &tr);
+         if (ret < 0) {
+             RCLCPP_ERROR(this->get_logger(), "SPI IOCTL Failed: %s", strerror(errno));
+         }
          
          gpio_cs_->setValue(1);
          processData(rx);
