@@ -164,6 +164,7 @@ private:
         std::vector<uint8_t> tx(sizeof(BatchPacket), 0);
         
         while (running_ && rclcpp::ok()) {
+/*
              // Wait for Data Ready signal from Pico (GPIO 24 HIGH)
              int timeout_us = 5000; // 5ms max wait (should trigger at 1kHz = 1ms)
              while (gpio_ready_->getValue() == 0 && timeout_us > 0) {
@@ -179,7 +180,11 @@ private:
                  }
                  continue;
              }
-             
+*/
+             // Blind Poll (Mimic verify_sensor_values.py)
+             // Python sleeps 1ms between reads.
+             usleep(1000); 
+
              // Pico is ready - perform SPI read
              performRead(tx, rx);
         }
