@@ -1,0 +1,96 @@
+; ============================================================================
+; PIO SPI Slave Mode 3 (CPOL=1, CPHA=1) - CORRECTED EDGE TIMING
+; ============================================================================
+; 
+; Mode 3 Timing:
+;   - Idle: SCK HIGH (CPOL=1)
+;   - Leading Edge: Falling (High -> Low) = Shift OUT MISO
+;   - Trailing Edge: Rising (Low -> High) = Sample MOSI
+;
+; HARDWARE CONFIGURATION (Pico 2A):
+;   GP16 = MOSI (from RPi) - IN PIN
+;   GP17 = CS (from RPi) - JMP PIN (software controlled on RPi GPIO5)
+;   GP18 = SCK (from RPi)
+;   GP19 = MISO (to RPi) - OUT PIN
+;
+; PROTOTYPE V1 NOTE:
+;   CS is wired to RPi Pin29 (GPIO5) instead of hardware CE0 (Pin24/GPIO8).
+;   The RPi driver uses software CS control via sysfs GPIO.
+;   
+; TODO (Prototype V2):
+;   Rewire CS to RPi Pin24 (CE0/GPIO8) for hardware SPI CS control.
+; ============================================================================
+
+.program spi_slave
+
+; Pin Mappings:
+; - IN PIN: MOSI (GP16)
+; - OUT PIN: MISO (GP19)
+; - JMP PIN: CS (GP17) for exit check
+
+public entry_point:
+    ; 1. Wait for CS to go Active (Low)
+    wait 0 gpio 17
+
+loop:
+    ; 2. Wait for Leading Edge (Falling: High -> Low)
+    ; In Mode 3, this is where we drive MISO.
+    wait 0 gpio 18
+    out pins, 1    ; Shift 1 bit to MISO
+
+    ; 3. Wait for Trailing Edge (Rising: Low -> High)
+    ; In Mode 3, this is where we sample MOSI.
+    wait 1 gpio 18
+    in pins, 1     ; Capture 1 bit from MOSI
+
+    ; 4. Check if CS is still Active (Low)
+    ; JMP PIN jumps if the pin is High (Inactive).
+    ; If CS is High, the transaction is over -> reset to start.
+    jmp pin entry_point 
+
+    ; 5. Continue Loop
+    jmp loop
+
+% c-sdk {
+#include "hardware/clocks.h"
+#include "hardware/gpio.h"
+
+static inline void spi_slave_program_init(PIO pio, uint sm, uint offset,
+                                          uint pin_mosi, uint pin_cs,
+                                          uint pin_sck, uint pin_miso) {
+    pio_sm_config c = spi_slave_program_get_default_config(offset);
+    
+    // ===== OUTPUT PIN CONFIGURATION (MISO) =====
+    pio_gpio_init(pio, pin_miso);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_miso, 1, true);
+    sm_config_set_out_pins(&c, pin_miso, 1);
+    
+    // ===== INPUT PIN CONFIGURATION (MOSI, SCK, CS) =====
+    pio_gpio_init(pio, pin_mosi);
+    gpio_set_dir(pin_mosi, GPIO_IN);
+    
+    pio_gpio_init(pio, pin_sck);
+    gpio_set_dir(pin_sck, GPIO_IN);
+    
+    // CS with pull-up (active low)
+    pio_gpio_init(pio, pin_cs);
+    gpio_set_dir(pin_cs, GPIO_IN);
+    gpio_pull_up(pin_cs);
+    
+    // ===== STATE MACHINE CONFIGURATION =====
+    // IN base = MOSI for sampling
+    sm_config_set_in_pins(&c, pin_mosi);
+    
+    // JMP PIN = CS for transaction end detection (CRITICAL for Mode 3)
+    sm_config_set_jmp_pin(&c, pin_cs);
+    
+    // 8-bit autopush/autopull for byte-correctness (avoids 32-bit LE swap)
+    sm_config_set_out_shift(&c, false, true, 8);  // MSB first, autopull at 8
+    sm_config_set_in_shift(&c, false, true, 8);   // MSB first, autopush at 8
+    
+    sm_config_set_clkdiv(&c, 1.0f);
+    
+    pio_sm_init(pio, sm, offset + spi_slave_offset_entry_point, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}

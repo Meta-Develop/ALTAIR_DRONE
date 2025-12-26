@@ -20,10 +20,41 @@
 3. **Current Status (Blocking)**:
    - **ROS2 Integration**: **SUCCESS** ✅
      - Actuators: **SUCCESS** ✅ (`actuator_spi_node` publishing telemetry)
-     - Sensors: **SUCCESS** ✅ (`spi_bridge_cpp` publishing at ~90Hz using `libgpiod`)
-   - **Next Step**: Tune Magic detection and optimize loop timing for 1kHz.
+     - Sensors: **SUCCESS** ✅ (`pico_bridge_node` publishing `ImuBatch` at ~1kHz)
+   - **Next Step**: EKF Integration with batched IMU data.
 
-## Critical Lessons Learned (Dec 25, 2024) - Part 2
+## Critical Lessons Learned (Dec 27, 2024) - Final SPI Bridge
+
+1. **SPI Bridge Manual CS (CRITICAL)**:
+   - **Issue**: RPi4 Pin24 (CE0/GPIO8) is NOT wired to Pico.
+   - **Workaround**: Pico CS is wired to RPi4 **GPIO25 (Pin22)**.
+   - **Fix**: `pico_bridge_node` uses `libgpiod` for software CS control.
+   - **Code**: `SPI_NO_CS` flag + manual `cs_low()/cs_high()` calls.
+
+2. **RPi4 Build OOM Crashes (CRITICAL)**:
+   - **Issue**: Compiling ROS 2 nodes on RPi4 triggers OOM killer (g++ terminated).
+   - **Fix**: ALWAYS use `colcon build --parallel-workers 1`.
+   - **Swap**: Enable 1GB swap: `sudo fallocate -l 1G /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile`.
+
+3. **ImuBatch Custom Message**:
+   - **Topic**: `/pico/imu_batch` (Type: `pico_bridge/msg/ImuBatch`).
+   - **Structure**: `std_msgs/Header header` + `sensor_msgs/Imu[] samples`.
+   - **Reason**: Avoids flooding network with 6.6kHz individual messages.
+   - **Rate**: ~1kHz Batch messages, ~2-6 samples per batch.
+
+4. **Checksum LSB Masking**:
+   - **Issue**: CRC fails with 1-bit LSB error sporadically.
+   - **Workaround**: Mask LSB in comparison: `(calc_crc & 0xFFFFFFFE) == (rx_crc & 0xFFFFFFFE)`.
+
+5. **I2C0 Hardware Failure (DO NOT DEBUG IN SW)**:
+   - **Affected Sensors**: BMP388 (Barometer), VL53L4CX (ToF).
+   - **Root Cause**: Physical wiring or pull-up issue on GP4/GP5.
+   - **Action**: Requires physical inspection. Software is correct.
+
+6. **Sensor Packet Sync**:
+   - `sensor_packet.h` MUST be identical on Pico and RPi.
+   - Location: `Software/common/include/sensor_packet.h`.
+   - Pico uses symlink: `Software/firmware/pico_sensors/sensor_packet.h -> ../../../common/include/sensor_packet.h`.
 1. **SPI Slave Data Corruption (Code Fix)**:
    - **Issue**: RPi4 received correct number of bytes but content was garbage/drifted.
    - **Cause 1 (Critical)**: `spi_slave.pio` ASM loop was set to `set x, 6` (7 bits) instead of `31` (32 bits). This discarded 24 bits of every 32-bit DMA word.

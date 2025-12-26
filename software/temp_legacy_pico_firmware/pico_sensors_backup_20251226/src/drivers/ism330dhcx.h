@@ -6,10 +6,6 @@
 #include "pico/stdlib.h"
 #include "hardware/spi.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 // ISM330DHCX Register Definitions
 #define ISM330_WHO_AM_I     0x0F
 #define ISM330_CTRL1_XL     0x10  // Accelerometer control
@@ -51,9 +47,5 @@ void ism330_read_data(spi_inst_t *spi, uint cs_pin, ism330_data_t *data);
 
 // Check if new data is available
 bool ism330_data_ready(spi_inst_t *spi, uint cs_pin);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif

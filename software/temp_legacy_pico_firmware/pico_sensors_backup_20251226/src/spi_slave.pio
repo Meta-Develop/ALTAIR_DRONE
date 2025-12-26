@@ -1,0 +1,13 @@
+; Dummy PIO file - Hardware SPI is used instead
+; This file is kept for CMake compatibility
+
+.program spi_slave
+.wrap_target
+    nop
+.wrap
+
+% c-sdk {
+static inline void spi_slave_init(PIO pio, uint sm, uint offset, uint pin_miso) {
+    // Not used - Hardware SPI slave is configured in main
+}
+%}
